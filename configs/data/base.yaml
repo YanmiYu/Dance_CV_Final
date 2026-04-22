@@ -1,0 +1,21 @@
+# Base data config. Refer to docs/project_decisions.md for scope.
+# Joint format is COCO-17 EVERYWHERE (see docs/project_decisions.md section 3).
+
+decisions_ref: docs/project_decisions.md
+
+joints:
+  format: coco_17
+  num_joints: 17
+  # flip_map is defined in src/datasets/common.py (single source of truth)
+
+paths:
+  raw_urls_dir: data/raw_urls
+  raw_videos_dir: data/raw_videos
+  raw_frames_dir: data/raw_frames
+  manifests_dir: data/manifests
+  labels_dir: data/labels
+  processed_dir: data/processed
+  predictions_dir: data/predictions
+  reports_dir: data/reports
+
+random_seed: 42

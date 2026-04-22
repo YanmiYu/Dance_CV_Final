@@ -1,0 +1,45 @@
+decisions_ref: docs/project_decisions.md
+
+# Unified pose-training data config.
+# All sources are converted into the internal schema (see src/data/convert_*.py).
+
+input_size: [256, 192]      # [H, W]
+heatmap_size: [64, 48]      # [H, W]
+sigma: 2.0
+
+datasets:
+  coco:
+    enabled: true
+    images_dir: data/labels/coco/images
+    annotations: data/labels/coco/internal_train.jsonl
+    val_annotations: data/labels/coco/internal_val.jsonl
+  crowdpose:
+    enabled: true
+    images_dir: data/labels/crowdpose/images
+    annotations: data/labels/crowdpose/internal_train.jsonl
+    val_annotations: data/labels/crowdpose/internal_val.jsonl
+  aistpp:
+    enabled: true
+    images_dir: data/labels/aistpp/images
+    annotations: data/labels/aistpp/internal_train.jsonl
+    val_annotations: data/labels/aistpp/internal_val.jsonl
+    frame_stride: 8          # sample every 8th frame (Phase 5.3)
+  custom_dance_val:
+    enabled: true
+    images_dir: data/labels/custom_dance_val/images
+    annotations: data/labels/custom_dance_val/internal_val.jsonl
+
+augmentations:
+  random_scale: [0.75, 1.25]
+  random_rotation_deg: 40
+  horizontal_flip_prob: 0.5
+  translation_jitter_px: 20
+  color_jitter:
+    brightness: 0.25
+    contrast: 0.25
+    saturation: 0.25
+  gaussian_blur_prob: 0.2
+  motion_blur_prob: 0.1
+  jpeg_quality: [55, 95]
+  jpeg_prob: 0.3
+  random_cutout_prob: 0.25

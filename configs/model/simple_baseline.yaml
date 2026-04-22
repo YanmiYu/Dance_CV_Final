@@ -1,0 +1,25 @@
+decisions_ref: docs/project_decisions.md
+
+# Simple Baseline (Phase 6.1). Proof-of-pipeline model, trained FROM SCRATCH.
+# No pretrained weights. No ImageNet init.
+
+name: simple_baseline
+pretrained: false
+init: kaiming
+
+backbone:
+  type: resnet_like
+  stem_channels: 64
+  stages:
+    - {channels: 64,  blocks: 2, stride: 1}
+    - {channels: 128, blocks: 2, stride: 2}
+    - {channels: 256, blocks: 2, stride: 2}
+    - {channels: 512, blocks: 2, stride: 2}
+
+head:
+  type: deconv
+  num_deconv_layers: 3
+  deconv_channels: [256, 256, 256]
+  deconv_kernels: [4, 4, 4]
+  final_kernel: 1
+  num_joints: 17

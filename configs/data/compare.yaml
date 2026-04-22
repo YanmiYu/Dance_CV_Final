@@ -1,0 +1,49 @@
+decisions_ref: docs/project_decisions.md
+
+# Compare pipeline config: normalize -> features -> DTW -> score -> feedback.
+
+normalization:
+  root_joint: hip_center          # midpoint of left_hip + right_hip
+  scale_by: torso                 # 'torso' | 'shoulder_width' | 'bbox_diag'
+  canonical_orient: false         # do NOT rotate away camera viewpoint for v1
+  min_visibility: 0.2             # joints below this are masked in comparison
+
+features:
+  use_normalized_coords: true
+  use_velocities: true
+  use_accelerations: true
+  use_limb_angles: true
+  use_motion_energy: true
+  smoothing_window: 5             # frames, for velocities/accelerations
+
+# MVP scope: upper body weighted more heavily (docs/project_decisions.md section 4).
+body_part_groups:
+  head:        [0, 1, 2, 3, 4]
+  left_arm:    [5, 7, 9]
+  right_arm:   [6, 8, 10]
+  torso:       [5, 6, 11, 12]
+  left_leg:    [11, 13, 15]
+  right_leg:   [12, 14, 16]
+
+body_part_weights:
+  head:      0.8
+  left_arm:  1.3
+  right_arm: 1.3
+  torso:     1.1
+  left_leg:  0.7
+  right_leg: 0.7
+
+dtw:
+  band_ratio: 0.15                # Sakoe-Chiba band as fraction of max length
+  step_pattern: symmetric2
+  warp_penalty: 0.05              # small penalty on excessive warping
+
+score_weights:
+  pose_geometry: 0.6
+  limb_angle:    0.3
+  timing:        0.1
+
+windowing:
+  seconds_per_window: 1.0
+  top_k_worst_windows: 3
+  top_k_worst_parts: 2

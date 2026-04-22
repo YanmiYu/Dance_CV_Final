@@ -1,0 +1,39 @@
+decisions_ref: docs/project_decisions.md
+
+# HRNet-W32 (Phase 6.2). Final model, trained FROM SCRATCH.
+# No pretrained weights. Same input/output format as simple_baseline so that
+# downstream inference/compare code does not change.
+
+name: hrnet_w32
+pretrained: false
+init: kaiming
+
+stem:
+  out_channels: 64
+
+stage1:
+  num_blocks: 4
+  channels: 64
+
+stage2:
+  num_branches: 2
+  num_blocks: [4, 4]
+  channels:   [32, 64]
+  num_modules: 1
+
+stage3:
+  num_branches: 3
+  num_blocks:  [4, 4, 4]
+  channels:    [32, 64, 128]
+  num_modules: 4
+
+stage4:
+  num_branches: 4
+  num_blocks:  [4, 4, 4, 4]
+  channels:    [32, 64, 128, 256]
+  num_modules: 3
+
+head:
+  type: final_conv
+  in_channels: 32
+  num_joints: 17

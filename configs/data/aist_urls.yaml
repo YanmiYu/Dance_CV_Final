@@ -1,0 +1,23 @@
+decisions_ref: docs/project_decisions.md
+
+# CSV ingestion (Phase 2.1).
+csv_path: data/raw_urls/aist_refined_2M_all_video_url.csv
+csv_has_header: false
+url_column_name: url
+manifest_out: data/manifests/raw_url_manifest.parquet
+
+# AIST filename pattern (best-effort, schema-tolerant):
+#   g<GENRE>_s<SITUATION>_c<CAMERA>_d<DANCER>_m<MUSIC>_ch<CHORE>.mp4
+# We DO NOT fail on rows that do not match. Missing fields -> null.
+filename_regex: '^g(?P<genre>[A-Z0-9]+)_s(?P<situation>[A-Z0-9]+)_c(?P<camera>\d+)_d(?P<dancer>\d+)_m(?P<music>[A-Z0-9]+)_ch(?P<chore>\d+)\.mp4$'
+
+# Download policy (Phase 2.4). Pilot-only first.
+download:
+  pilot_n: 80
+  rng_seed: 123
+  out_dir: data/raw_videos
+  timeout_sec: 60
+  max_retries: 3
+  head_check_sample: 20
+  prefer:
+    - cameras: ['01']     # prefer fixed camera 01 if known
