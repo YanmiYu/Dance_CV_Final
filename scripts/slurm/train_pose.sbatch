@@ -31,10 +31,14 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs/slurm data/processed/train
 
-# Oscar module environment. If `module load` fails because CCV rotated the
-# build-string, run `module avail anaconda` on a login node and update this.
+# Oscar module environment. Must match setup_env.sh's ANACONDA_MODULE so the
+# `dance-cv` env created there is actually on PATH here. If `module load`
+# fails because CCV rotated the build-string, run
+#     module -t avail 2>&1 | grep -iE 'anaconda|miniconda'
+# on a login node and update BOTH this file and scripts/slurm/setup_env.sh.
+ANACONDA_MODULE="${ANACONDA_MODULE:-anaconda3/2023.09-0-aqbc}"
 module purge
-module load anaconda/2023.09-0-7nso27y
+module load "${ANACONDA_MODULE}"
 
 # Activate the env created by scripts/slurm/setup_env.sh.
 # shellcheck disable=SC1091
