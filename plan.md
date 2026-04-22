@@ -2,9 +2,13 @@
 
 ## Project Overview
 
-Given a 10–15 second benchmark dance video and a learner's video of the same phrase, the system extracts body keypoints from both, aligns the two sequences in time, and outputs a timestamped report telling the learner exactly **when** and **which body parts** deviate from the benchmark.
+Given a 10–15 second benchmark dance video and a learner's video of the same phrase, the system:
+1. Extracts body keypoints from both videos (MediaPipe)
+2. Normalizes and aligns the two motion sequences (DTW)
+3. **Runs a trained BiGRU classifier** to predict, for each aligned frame and each body part, whether the learner's pose is good / moderate / off
+4. Outputs a timestamped report telling the learner exactly **when** and **which body parts** deviate from the benchmark
 
-No data collection is required. All testing and validation uses open-source pose/dance datasets.
+No data collection is required. Training and testing use open-source dance datasets (AIST++, Human3.6M).
 
 ---
 
@@ -13,8 +17,8 @@ No data collection is required. All testing and validation uses open-source pose
 | Member | Primary Focus |
 |--------|--------------|
 | Member 1 | Pose estimation & keypoint extraction |
-| Member 2 | Motion alignment & deviation scoring |
-| Member 3 | Evaluation, open-source data integration & ablation |
+| Member 2 | Motion alignment, feature engineering & model training |
+| Member 3 | Dataset preparation, label generation & model evaluation |
 | Member 4 | System integration, visualization & Streamlit demo |
 
 ---
@@ -23,120 +27,122 @@ No data collection is required. All testing and validation uses open-source pose
 
 | Dataset | Purpose |
 |---------|---------|
-| **COCO Keypoints** | Validate that the pose estimator produces correct 17-joint output |
-| **AIST++ / AIOZ-GDance** | Source of short paired or solo dance sequences for end-to-end testing |
-| **Human3.6M** | Additional motion sequences to stress-test the alignment and scoring |
-| **Publicly available dance tutorial / MV clips** (YouTube) | Real benchmark videos (e.g., BLACKPINK choreography) used as inputs in the demo |
-
-For the demo and development, we trim clips to 10–15 seconds and use a single frontal camera angle.
+| **AIST++** | Primary training/validation/test data — 1,408 paired dance sequences across 30 subjects and 10 genres; same choreography performed by different dancers gives natural benchmark/learner pairs |
+| **Human3.6M** | Additional motion sequences for stress-testing the pipeline |
+| **COCO Keypoints** | Validate that the pose estimator produces correct 17-joint output on still images |
+| **YouTube MV / tutorial clips** | Real benchmark videos used in the final demo (BLACKPINK, etc.) |
 
 ---
 
-## Week 1 — Foundation: Pose Extraction Pipeline
+## Model: What We Train and Why
 
-**Goal:** Given any 10–15 second video, reliably extract a smooth keypoint sequence and save it to disk.
+### Problem Framing
 
-### Member 1 — Pose Estimation
-- [ ] Evaluate MediaPipe Pose vs. MMPose on 2–3 sample dance clips; choose one based on accuracy and ease of setup (MediaPipe is the default — CPU-friendly, no extra install)
-- [ ] Implement `extract_keypoints(video_path) → np.ndarray` returning shape `(T, 17, 3)` — `[x, y, confidence]` per joint per frame
-- [ ] Add post-processing: Savitzky-Golay temporal smoothing to reduce jitter; confidence-based linear interpolation for occluded frames
-- [ ] Save/load keypoints to `.npy`; write a quick visualization script that draws the skeleton on each frame to verify output visually
+The original pipeline uses a fixed numeric threshold to flag "off" frames. This is fragile — the right threshold depends on the dance style, body part, and speed. We replace the threshold with a **learned classifier** trained on AIST++ data.
 
-### Member 2 — Normalization
-- [ ] Implement `normalize(seq)`: center all joints on hip midpoint, scale by torso length (neck-to-hip distance) so body size and camera distance no longer affect comparisons
-- [ ] Verify that two clips of the same dancer at different distances produce near-identical normalized sequences
-- [ ] Prototype DTW on a pair of short toy sequences; confirm it handles a learner who performs the move correctly but slightly slower
+### Approach: Bidirectional GRU Frame Classifier
 
-### Member 3 — Data Preparation & Validation
-- [ ] Download and preprocess clips from AIST++ or AIOZ-GDance; trim to 10–15 second phrases, convert to 30 fps MP4
-- [ ] Validate that Member 1's extractor produces sensible keypoints on these clips (visual spot-check, confidence histogram)
-- [ ] Prepare at least 3 test pairs: `(benchmark_clip, learner_clip)` where the "learner" is a different clip of the same routine or a clip with an intentionally different pose — used to verify the scoring logic later
+```
+Input at each aligned frame t:
+  diff_features(t)  =  [bench_kp_norm(t) − user_kp_norm(t)]  per body part
+                     =  6 parts × 4 features = 24-dim vector
+                        features per part: mean_x_err, mean_y_err,
+                                           max_joint_err, mean_joint_err
 
-### Member 4 — Project Scaffold
-- [ ] Set up the repo structure (see File Layout below) and `requirements.txt`
-- [ ] Write `README.md` with setup and run instructions
-- [ ] Build `video_io.py`: `load_video`, `standardize_fps`, `export_side_by_side`
-- [ ] Sketch the Streamlit UI wireframe: two upload boxes, a "Run Analysis" button, a results panel
+Model:
+  BiGRU(hidden=64, layers=2, dropout=0.3)
+    → takes sequence of 24-dim difference vectors  shape (T', 24)
+    → outputs per-frame hidden states              shape (T', 128)
+  Linear(128 → 6 × 3)   →  logits for 6 parts × 3 classes (good / moderate / off)
 
-### End-of-Week-1 Milestone
-- `extract_keypoints(video_path)` works correctly on any frontal dance clip
-- 3 test pairs ready in `data/` with keypoints extracted
-- All members can run the pipeline on their machine
+Output per frame per body part:
+  class 0 — good      (error < 0.15 torso lengths)
+  class 1 — moderate  (0.15 – 0.35)
+  class 2 — off       (> 0.35)
+```
 
----
+### Why BiGRU?
+- Captures **temporal context**: whether a pose error is a brief fluctuation or a sustained deviation
+- Bidirectional: can see both what came before and after each frame — helps distinguish a transition pose (expected deviation) from a genuine mistake
+- Lightweight: trains in minutes on CPU; runs in real time on a laptop
 
-## Week 2 — Core System: Alignment, Scoring & Timestamped Feedback
+### Label Generation (No Manual Annotation Needed)
 
-**Goal:** Given two extracted keypoint sequences, produce a timestamped list of "off" moments per body part.
+AIST++ provides the same choreography performed by multiple subjects. We:
+1. Pick one subject as the "benchmark" and another as the "learner" for each choreography
+2. Compute normalized DTW-aligned difference vectors
+3. Apply the **geometric threshold** (0.15 / 0.35) to auto-generate 3-class labels
+4. This gives thousands of labeled (feature, label) pairs from existing open-source data
 
-### Member 1 — Robustness & Integration
-- [ ] Harden the extractor: handle missing detections (no person in frame), very fast motion, and partial occlusion
-- [ ] Expose a clean `PoseEstimator` class that wraps the chosen backend so swapping MediaPipe ↔ MMPose requires changing one line
-- [ ] Profile runtime; downsample to 15 fps before DTW if needed for speed
+This is called **weak supervision** — labels are noisy but the volume makes up for it.
 
-### Member 2 — Alignment & Deviation Scoring
-- [ ] Implement `dtw_align(bench_seq, user_seq)` using `fastdtw`; output the warping path and the two aligned sequences of equal length `T'`
-- [ ] Implement `compute_joint_errors(aligned_bench, aligned_user) → dict[joint → np.ndarray (T',)]` — per-joint Euclidean error at each aligned frame
-- [ ] Group joints into body parts and compute `per_part_error_over_time(joint_errors) → dict[part → np.ndarray (T',)]`
-- [ ] Implement `find_off_moments(part_errors, threshold, fps) → List[Interval]` — scans each body part's error curve and returns time intervals (start_s, end_s) where error exceeds the threshold
-- [ ] Compute an overall similarity score (0–100) as a summary statistic
+### Train / Validation / Test Split
 
-### Member 3 — Scoring Validation & Ablation
-- [ ] Run the end-to-end pipeline on the 3 test pairs; manually inspect whether the flagged timestamps correspond to visually obvious differences
-- [ ] Run a simple ablation: compare results with and without normalization; compare DTW vs. naive frame-by-frame matching — document which produces more sensible intervals
-- [ ] Adjust the deviation threshold empirically so that minor style variation is not flagged but clear positional errors are
-
-### Member 4 — Visualization
-- [ ] Implement `overlay_skeleton(frame, keypoints, part_errors)` — draws skeleton on a frame; joints colored green / yellow / red based on current error level
-- [ ] Implement `render_comparison_video(bench_frames, user_frames, bench_kp, user_kp, intervals, out_path)` — side-by-side MP4 with colored skeletons and a timestamp ticker; "off" intervals highlighted with a red border
-- [ ] Implement `plot_error_timeline(part_errors, intervals, fps)` — Plotly chart: x = time in seconds, y = error per body part, with shaded "off" regions
-- [ ] Wire all components into `demo/app.py` so the full pipeline runs from the UI
-
-### End-of-Week-2 Milestone
-- Input two video files → output a list of `(time_start, time_end, body_part, severity)` intervals
-- Comparison video and timeline chart render correctly
-- Streamlit app runs end-to-end on at least one test pair
+| Split | Source | Size | Purpose |
+|-------|--------|------|---------|
+| Train | AIST++ — 20 choreographies, subjects 1–20 | ~70% of pairs | Learn classifier weights |
+| Validation | AIST++ — same choreographies, subjects 21–25 | ~15% | Tune learning rate, dropout, threshold |
+| Test | AIST++ — 5 held-out choreographies (never seen during training) | ~15% | Final reported accuracy and F1 |
+| Demo | YouTube MV + team-recorded clips | 3–5 clips | Qualitative demo in Streamlit |
 
 ---
 
-## Week 3 — Evaluation, Polish & Demo
+## Task Checklist
 
-**Goal:** Validate the system's outputs, fix failure cases, and prepare the final demo and report.
+### Infrastructure & Code
+- [x] Repo structure set up; `requirements.txt` complete with all dependencies
+- [x] `src/video_io.py` — `load_video`, `standardize`, `export_side_by_side`
+- [x] `src/pose_extraction.py` — `PoseEstimator` (MediaPipe), Savitzky-Golay smoothing, confidence interpolation
+- [x] `src/normalization.py` — center on hip midpoint, scale by torso length
+- [x] `src/alignment.py` — DTW alignment via `fastdtw`, `warping_path_to_timestamps`
+- [x] `src/dataset.py` — `build_diff_features` (24-dim), `build_labels`, `DanceDeviationDataset`, `collate_fn`
+- [x] `src/model.py` — BiGRU `DeviationClassifier` (input 24 → hidden 64×2 → output 6×3)
+- [x] `src/train.py` — training loop, class-weighted CE loss, Adam optimizer, CSV logging, best-checkpoint saving
+- [x] `src/test.py` — evaluation loop, per-class & per-part F1, confusion matrices, threshold baseline
+- [x] `src/scoring.py` — `compute_joint_errors`, `per_part_error_over_time`, `find_off_moments`, `overall_score`
+- [x] `src/visualization.py` — skeleton overlay, side-by-side comparison video, Plotly error timeline & bar chart
+- [x] `src/feedback.py` — plain-English interval descriptions, Markdown report formatter
+- [x] `demo/app.py` — Streamlit UI: upload → full pipeline → score + video + chart + feedback
+- [x] `main.py` — CLI for `extract`, `extract_all`, `train`, `test`, `analyze`, `batch`
+- [x] `slurm_run.sh` — SLURM job script for Oscar (all tasks)
+- [x] `scripts/download_data.sh` — downloads 5 AIST++ benchmark/learner video pairs
+- [x] `scripts/build_dataset.py` — builds train/val/test `.npz` files from AIST++ keypoints
 
-### Member 1 — Pipeline Finalization
-- [ ] Final robustness pass: test on all 3+ test pairs; fix any systematic failures
-- [ ] (Stretch) Add live webcam capture mode: user records through the app instead of uploading a file
-- [ ] Write docstrings for all public functions in `pose_extraction.py` and `video_io.py`
+### Data & Extraction
+- [x] Download 5 AIST++ video pairs into `data/phrase_01/` – `data/phrase_05/`
+- [x] Extract keypoints for all 5 pairs (`python main.py batch`); `.npy` files saved
+- [x] Full inference pipeline verified end-to-end: normalization → DTW → scoring → JSON report + comparison video
+- [ ] Download AIST++ **pre-extracted 2D keypoints** (`.pkl`) for training — no video needed
+- [ ] Run `scripts/build_dataset.py` to generate labeled `.npz` pairs into `data/train/`, `data/val/`, `data/test/`
+- [ ] Confirm label class distribution (expect majority "good", minority "off")
+- [ ] Verify 5 random labeled sequences visually — do "off" labels match large visible differences?
 
-### Member 2 — Scoring Finalization
-- [ ] Tune threshold and body-part weights based on Member 3's validation findings
-- [ ] Compute and report quantitative metrics across the test pairs:
-  - Mean number of "off" intervals per clip
-  - Distribution of interval durations
-  - Correlation between overall score and visible deviation (sanity check)
-- [ ] Document the final scoring formula and threshold choices in `docs/final_report.md`
+### Model Training & Testing
+- [ ] Launch training on Oscar: `sbatch slurm_run.sh train`
+- [ ] Monitor validation loss; adjust dropout / learning rate if overfitting
+- [ ] Run `python main.py test` on the held-out test split; save `results/test_metrics.json`
+- [ ] Report: per-class accuracy, macro F1, weighted F1, confusion matrix per body part
+- [ ] Run ablation experiments:
+  - Unidirectional GRU vs. BiGRU
+  - No DTW (naive frame-by-frame pairing) vs. DTW
+  - No normalization vs. normalized
+  - Frame-level MLP (no temporal context) vs. BiGRU
 
-### Member 3 — Evaluation Report
-- [ ] For each test pair, write a short written assessment: does the system's flagged output agree with what a human viewer would notice?
-- [ ] Compile an ablation table: normalization on/off × DTW on/off → how do flagged intervals change?
-- [ ] Write the evaluation section of the final report
+### Evaluation & Analysis
+- [ ] Per-body-part error analysis — which body parts are hardest for the model?
+- [ ] Failure case analysis — when does the model disagree with the threshold baseline, and which is right?
+- [ ] Run full pipeline on 3–5 demo clips outside AIST++ (e.g. YouTube); write short qualitative assessment for each
+- [ ] Tabulate model predictions vs. threshold baseline on 3 demo pairs — fewer false positives?
 
-### Member 4 — Demo Polish & Presentation
-- [ ] Refine Streamlit UI: loading spinner, clear section headers, timestamps formatted as `MM:SS.f`
-- [ ] Add a **Feedback Summary** panel listing flagged intervals in plain English:
-  > "At 3.2 s – 5.8 s your **right arm** is significantly off. At 9.0 s – 11.4 s your **left leg** deviates from the benchmark."
+### Report & Presentation
+- [ ] Write model training + results sections in `docs/final_report.md`
+- [ ] Write ablation study section with clean F1 tables and confusion matrices
+- [ ] Write qualitative evaluation section
+- [ ] End-to-end test on a new demo pair not seen during any development
+- [ ] Refine Streamlit UI: loading spinner, `MM:SS.f` timestamps, clear section headers
 - [ ] Record a 2–3 minute screen-capture demo video
-- [ ] Prepare presentation slides: motivation → pipeline → demo → results → limitations → future work
-
-### All Members — Integration & Documentation
-- [ ] End-to-end test on a new pair not seen during development
-- [ ] Write assigned sections of the final report; proofread and merge
-- [ ] Rehearse the live demo; confirm it runs without errors on the demo machine
-
-### End-of-Week-3 Milestone
-- `streamlit run demo/app.py` accepts two videos and outputs timestamped "off" intervals
-- Evaluation results documented across ≥ 3 test pairs
-- Presentation slides and demo video ready
+- [ ] Prepare slides: motivation → pipeline → training → results → ablation → demo → limitations → future work
+- [ ] Rehearse live demo; confirm it runs without errors on the demo machine
 
 ---
 
@@ -144,14 +150,14 @@ For the demo and development, we trim clips to 10–15 seconds and use a single 
 
 | Deliverable | Owner | Target |
 |------------|-------|--------|
-| Pose extraction module (`pose_extraction.py`) | M1 | End of Week 1 |
-| Normalization + DTW alignment module | M2 | End of Week 1–2 |
-| 3+ open-source test pairs (trimmed, keypoints extracted) | M3 | End of Week 1 |
-| Deviation scoring + `find_off_moments()` | M2 | End of Week 2 |
-| Skeleton overlay + comparison video renderer | M4 | End of Week 2 |
-| Streamlit app (basic, end-to-end) | M4 | End of Week 2 |
-| Scoring validation & ablation | M3 | End of Week 3 |
-| Polished demo + feedback text | M4 | End of Week 3 |
+| Pose extraction module | M1 | End of Week 1 |
+| `dataset.py` + labeled `.npz` training data | M2 + M3 | End of Week 1 |
+| Train/val/test split index (`splits.json`) | M3 | End of Week 1 |
+| Trained BiGRU checkpoint | M2 | End of Week 2 |
+| Test-set evaluation metrics + confusion matrices | M3 | End of Week 2 |
+| Ablation table | M3 | End of Week 2 |
+| End-to-end Streamlit demo (with trained model) | M4 | End of Week 2 |
+| Qualitative demo evaluation | M1 | End of Week 3 |
 | Final report | All | End of Week 3 |
 | Demo video + slides | M4 | End of Week 3 |
 
@@ -159,7 +165,7 @@ For the demo and development, we trim clips to 10–15 seconds and use a single 
 
 ## Technical Architecture
 
-### Pipeline at a Glance
+### Full Pipeline (Inference)
 
 ```
 benchmark.mp4 ──┐
@@ -169,15 +175,54 @@ learner.mp4   ──┘                                                         
                                                                     [4. DTW Alignment]
                                                                                │
                                                                                ▼
-                                                              [5. Per-joint Error Computation]
+                                                              [5. Difference Feature Builder]
+                                                                    (T', 24) per frame
                                                                                │
                                                                                ▼
-                                                              [6. find_off_moments()]
-                                                                     ↙            ↘
-                                                      [7a. Comparison video]  [7b. Timeline chart]
-                                                                     ↘            ↙
-                                                               [8. Streamlit UI]
-                                                         "At 3.2s–5.8s your right arm is off"
+                                                          ┌────────────────────────────────┐
+                                                          │  6. BiGRU Deviation Classifier │  ← trained model
+                                                          │  input:  (T', 24)              │
+                                                          │  output: (T', 6, 3) labels     │
+                                                          └───────────────┬────────────────┘
+                                                                          │
+                                                                          ▼
+                                                              [7. Interval Extraction]
+                                                         contiguous "off" frames → Interval list
+                                                                    ↙            ↘
+                                                     [8a. Comparison video]  [8b. Timeline chart]
+                                                                    ↘            ↙
+                                                              [9. Streamlit UI]
+                                                      "At 3.2s–5.8s your right arm is off"
+```
+
+### Training Pipeline
+
+```
+AIST++ keypoints (.npy)
+        │
+        ▼
+[normalize + DTW-align pairs]
+        │
+        ▼
+[build_diff_features()]  →  (T', 24) per pair
+        │
+        ▼
+[geometric threshold]    →  (T', 6) class labels   ← weak supervision
+        │
+        ▼
+[save .npz per pair]     →  data/train/ data/val/ data/test/
+        │
+        ▼
+[PyTorch DataLoader]
+        │
+        ▼
+[BiGRU DeviationClassifier]
+   CrossEntropyLoss (weighted for class imbalance)
+   Adam optimizer, lr=1e-3
+   30 epochs, best checkpoint by val F1
+        │
+        ▼
+[checkpoints/best_model.pt]
 ```
 
 ### Layer-by-Layer Detail
@@ -185,121 +230,84 @@ learner.mp4   ──┘                                                         
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  LAYER 1 — VIDEO INGESTION          src/video_io.py  (M4)                   │
-│                                                                              │
-│  load_video(path) → Iterator[frame]          BGR frames + timestamps         │
-│  standardize(video, fps=30, res=(720,1280))  resample & resize               │
+│  load_video(path) → frames + fps                                             │
+│  standardize(frames, fps=15, res=(720,1280))                                 │
 │  export_side_by_side(frames_A, frames_B, out_path)                           │
 └─────────────────────────────────┬────────────────────────────────────────────┘
-                                  │ raw frames (np.ndarray)
+                                  │ BGR frames
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  LAYER 2 — POSE EXTRACTION          src/pose_extraction.py  (M1)            │
-│                                                                              │
-│  class PoseEstimator:                                                        │
-│    backend: "mediapipe" | "mmpose"                                           │
-│    .extract_sequence(video) → np.ndarray  shape (T, 17, 3)                  │
-│                                           axis-2: [x_px, y_px, confidence]  │
-│                                                                              │
-│  smooth(seq)              Savitzky-Golay filter along time axis              │
-│  interpolate_missing(seq) fill low-confidence frames by linear interp        │
+│  PoseEstimator(backend="mediapipe")                                          │
+│    .extract_sequence(frames) → (T, 17, 3)  [x_px, y_px, confidence]         │
+│  smooth()  interpolate_missing()  save_keypoints()  load_keypoints()         │
 └─────────────────────────────────┬────────────────────────────────────────────┘
-                                  │ KeypointSequence (T, 17, 3)
+                                  │ (T, 17, 3)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  LAYER 3 — NORMALIZATION            src/normalization.py  (M2)              │
-│                                                                              │
-│  normalize(seq) → seq_norm                                                   │
-│    1. Translate: hip midpoint → (0, 0)                                       │
-│    2. Scale: divide by torso length (neck midpoint to hip midpoint)          │
-│                                                                              │
-│  Result: both sequences are comparable regardless of body size or            │
-│  distance from camera                                                        │
+│  normalize(seq): center on hip midpoint, scale by torso length               │
+│  → (T, 17, 3) in torso-length units, body-size independent                  │
 └─────────────────────────────────┬────────────────────────────────────────────┘
-                                  │ normalized sequences
+                                  │ normalized (T, 17, 3)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  LAYER 4 — TEMPORAL ALIGNMENT       src/alignment.py  (M2)                  │
-│                                                                              │
+│  LAYER 4 — DTW ALIGNMENT            src/alignment.py  (M2)                  │
 │  dtw_align(bench_norm, user_norm)                                            │
-│    → warping_path: List[(i_bench, i_user)]                                   │
-│    → bench_aligned, user_aligned  both shape (T', 17, 3)                     │
-│                                                                              │
-│  Library: fastdtw  (O(N) time and space)                                     │
-│  Cost: mean Euclidean distance across all 17 joints per frame pair           │
-│                                                                              │
-│  Handles learners who perform the correct motion at a different speed        │
+│    → bench_aligned, user_aligned  shape (T', 17, 3)                          │
+│    → warping_path  List[(i_bench, i_user)]                                   │
+│  Library: fastdtw — O(N) time/space                                          │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   │ aligned sequences (T', 17, 3)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  LAYER 5 — DEVIATION SCORING        src/scoring.py  (M2)                   │
-│                                                                              │
-│  compute_joint_errors(bench_aligned, user_aligned)                           │
-│    → errors: np.ndarray  shape (T', 17)   per-joint error at each frame     │
-│                                                                              │
-│  BODY_PARTS grouping (COCO joint indices):                                   │
-│    LEFT_ARM:  [5 shoulder, 7 elbow, 9 wrist]                                 │
-│    RIGHT_ARM: [6 shoulder, 8 elbow, 10 wrist]                                │
-│    LEFT_LEG:  [11 hip, 13 knee, 15 ankle]                                    │
-│    RIGHT_LEG: [12 hip, 14 knee, 16 ankle]                                    │
-│    TORSO:     [5, 6, 11, 12]                                                 │
-│    HEAD:      [0 nose]                                                       │
-│                                                                              │
-│  per_part_error_over_time(errors)                                            │
-│    → dict[part_name → np.ndarray (T',)]   mean error per part per frame     │
-│                                                                              │
-│  find_off_moments(part_errors, threshold=0.25, fps=30)                       │
-│    → List[Interval(start_s, end_s, part_name, mean_error)]                  │
-│      scans each part's error curve; flags contiguous runs > threshold        │
-│      minimum interval length: 0.5 s (avoids single-frame noise)             │
-│                                                                              │
-│  overall_score(part_errors) → float  0–100                                  │
-│    = 100 × (1 − mean_error / max_possible_error)                             │
+│  LAYER 5 — FEATURE ENGINEERING      src/dataset.py  (M2)                    │
+│  build_diff_features(bench_aligned, user_aligned)                            │
+│    For each of 6 body parts:                                                 │
+│      [mean_x_err, mean_y_err, max_joint_err, mean_joint_err]                 │
+│    → (T', 24)  — one 24-dim vector per aligned frame                         │
 └─────────────────────────────────┬────────────────────────────────────────────┘
-                                  │ List[Interval] + per_part_errors
+                                  │ (T', 24) diff feature sequence
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  LAYER 6 — VISUALIZATION & FEEDBACK                                          │
+│  LAYER 6 — BiGRU DEVIATION CLASSIFIER   src/model.py  (M2)                 │
 │                                                                              │
+│  class DeviationClassifier(nn.Module):                                       │
+│    self.gru  = nn.GRU(input_size=24, hidden_size=64,                         │
+│                       num_layers=2, batch_first=True,                        │
+│                       bidirectional=True, dropout=0.3)                       │
+│    self.head = nn.Linear(128, 6 * 3)                                         │
+│                                                                              │
+│    forward(x: Tensor (B, T', 24))                                            │
+│      h, _ = self.gru(x)          → (B, T', 128)                             │
+│      logits = self.head(h)        → (B, T', 18)                             │
+│      return logits.view(B, T', 6, 3)   # 6 parts × 3 classes                │
+│                                                                              │
+│  Output per frame per body part:                                             │
+│    class 0 = good      (error < 0.15 torso lengths)                          │
+│    class 1 = moderate  (0.15 – 0.35)                                         │
+│    class 2 = off       (> 0.35)                                              │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │ (T', 6) predicted class per frame per part
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  LAYER 7 — INTERVAL EXTRACTION      src/scoring.py  (M2)                    │
+│  labels_to_intervals(pred_labels, fps, min_duration_s=0.5)                   │
+│    → List[Interval(start_s, end_s, part, severity)]                          │
+│    contiguous "class 2" (off) runs per body part → one Interval each         │
+│    minimum run length = 0.5 s to suppress single-frame noise                 │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │ List[Interval]
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  LAYER 8 — VISUALIZATION & FEEDBACK                                          │
 │  src/visualization.py  (M4)                                                  │
-│    overlay_skeleton(frame, kp, part_errors_at_t)                             │
-│      draws limbs; joints colored: green <0.15 / yellow 0.15–0.35 / red >0.35│
-│    render_comparison_video(bench_frames, user_frames,                        │
-│                            bench_kp, user_kp, intervals, out_path)          │
-│      side-by-side MP4; red border during flagged intervals                   │
-│    plot_error_timeline(part_errors, intervals, fps)                          │
-│      Plotly line chart: time (s) vs. error per part; shaded "off" regions    │
-│                                                                              │
+│    overlay_skeleton(), render_comparison_video(), plot_error_timeline()       │
 │  src/feedback.py  (M4)                                                       │
-│    generate_feedback(intervals) → List[str]                                  │
-│      "At 3.2 s – 5.8 s your RIGHT ARM is significantly off."                │
-│      "At 9.0 s – 11.4 s your LEFT LEG deviates from the benchmark."         │
+│    generate_feedback(intervals) → plain-English timestamped sentences         │
 └─────────────────────────────────┬────────────────────────────────────────────┘
-                                  │
                                   ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  STREAMLIT APP    demo/app.py  (M4)                                          │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  Upload Benchmark Video        Upload Your Video                    │    │
-│  │  [  benchmark.mp4  ▼ ]         [  learner.mp4  ▼ ]                 │    │
-│  │                    [ Run Analysis ]                                  │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─────────────────────┐  ┌────────────────────┐                            │
-│  │  Benchmark          │  │  Your Performance  │  ← side-by-side playback  │
-│  │  [skeleton overlay] │  │  [skeleton overlay]│    color-coded joints      │
-│  └─────────────────────┘  └────────────────────┘                            │
-│                                                                              │
-│  Overall Similarity Score:  74 / 100                                         │
-│                                                                              │
-│  ──── Error Timeline ──────────────────────────────────────────────────     │
-│  [Plotly chart: time vs. error per body part, shaded "off" intervals]        │
-│                                                                              │
-│  ──── Feedback ────────────────────────────────────────────────────────     │
-│  • At 3.2 s – 5.8 s your RIGHT ARM is significantly off.                    │
-│  • At 9.0 s – 11.4 s your LEFT LEG deviates from the benchmark.             │
-└──────────────────────────────────────────────────────────────────────────────┘
+                           demo/app.py  (M4) — Streamlit UI
 ```
 
 ---
@@ -307,14 +315,13 @@ learner.mp4   ──┘                                                         
 ### Data Structures
 
 ```python
-# Keypoint sequence for one video
-# shape: (T, 17, 3)   axis-2 = [x_normalized, y_normalized, confidence]
+# Keypoint sequence — shape (T, 17, 3), axis-2 = [x_norm, y_norm, confidence]
 KeypointSequence = np.ndarray
 
-# COCO 17-joint index reference
-#  0 nose   | 1 L_eye  | 2 R_eye  | 3 L_ear   | 4 R_ear
-#  5 L_shldr| 6 R_shldr| 7 L_elbw | 8 R_elbw  | 9 L_wrst | 10 R_wrst
-# 11 L_hip  |12 R_hip  |13 L_knee |14 R_knee  |15 L_ankl | 16 R_ankl
+# COCO joint indices
+#  0 nose | 1 L_eye | 2 R_eye | 3 L_ear | 4 R_ear
+#  5 L_shldr | 6 R_shldr | 7 L_elbw | 8 R_elbw | 9 L_wrst | 10 R_wrst
+# 11 L_hip | 12 R_hip | 13 L_knee | 14 R_knee | 15 L_ankl | 16 R_ankl
 
 BODY_PARTS: dict[str, list[int]] = {
     "LEFT_ARM":   [5, 7, 9],
@@ -325,20 +332,19 @@ BODY_PARTS: dict[str, list[int]] = {
     "HEAD":       [0],
 }
 
-@dataclass
-class Interval:
-    start_s:    float   # start time in seconds
-    end_s:      float   # end time in seconds
-    part:       str     # e.g. "RIGHT_ARM"
-    mean_error: float   # average normalized deviation during this interval
+# Diff feature vector per frame: shape (T', 24)
+# 6 parts × 4 features: [mean_x_err, mean_y_err, max_joint_err, mean_joint_err]
+DiffFeatures = np.ndarray
+
+# Label tensor per frame: shape (T', 6)  — 0=good, 1=moderate, 2=off
+Labels = np.ndarray
 
 @dataclass
-class AnalysisResult:
-    overall_score:      float               # 0–100
-    intervals:          list[Interval]      # timestamped "off" segments
-    part_errors:        dict[str, np.ndarray]  # part → (T',) error time series
-    warping_path:       list[tuple[int, int]]  # DTW warping path
-    feedback_lines:     list[str]           # human-readable sentences
+class Interval:
+    start_s:    float   # start time (seconds)
+    end_s:      float   # end time (seconds)
+    part:       str     # e.g. "RIGHT_ARM"
+    severity:   int     # 1=moderate, 2=off
 ```
 
 ---
@@ -346,20 +352,24 @@ class AnalysisResult:
 ### Module Dependency Graph
 
 ```
-video_io.py  ←──────────────────────────── no external src deps
+video_io.py
     ↓
-pose_extraction.py  ←───────────────────── imports video_io
+pose_extraction.py
     ↓
-normalization.py    ←───────────────────── imports nothing from src
+normalization.py
     ↓
-alignment.py        ←───────────────────── imports normalization
+alignment.py
     ↓
-scoring.py          ←───────────────────── imports alignment
+dataset.py          ←── also used by train.py and test.py
     ↓
-visualization.py    ←───────────────────── imports scoring, video_io
-feedback.py         ←───────────────────── imports scoring
+model.py            ←── trained by train.py; loaded by scoring.py at inference
     ↓
-demo/app.py         ←───────────────────── orchestrates everything
+scoring.py          (labels_to_intervals)
+    ↓
+visualization.py ──┐
+feedback.py      ──┤
+                   ↓
+              demo/app.py  (orchestrates all)
 ```
 
 ---
@@ -371,34 +381,56 @@ Final_CV/
 │
 ├── data/
 │   ├── phrase_01/
-│   │   ├── benchmark.mp4        # open-source clip (AIST++ / MV)
-│   │   ├── learner.mp4          # comparison clip
+│   │   ├── benchmark.mp4
+│   │   ├── learner.mp4
 │   │   └── keypoints/
-│   │       ├── benchmark_kp.npy   # (T, 17, 3)
+│   │       ├── benchmark_kp.npy    # (T, 17, 3)
 │   │       └── learner_kp.npy
 │   ├── phrase_02/  ...
-│   └── phrase_03/  ...
+│   ├── phrase_03/  ...
+│   ├── train/                      # .npz files: features + labels per pair
+│   ├── val/
+│   ├── test/
+│   └── splits.json                 # choreography IDs → train/val/test
 │
 ├── src/
 │   ├── video_io.py            # M4 — frame loading, standardization, export
 │   ├── pose_extraction.py     # M1 — PoseEstimator, smoothing, interpolation
 │   ├── normalization.py       # M2 — centering & scaling
 │   ├── alignment.py           # M2 — DTW alignment
-│   ├── scoring.py             # M2 — joint errors, find_off_moments, overall_score
-│   ├── visualization.py       # M4 — skeleton overlay, video renderer, timeline chart
+│   ├── dataset.py             # M2 — DiffFeature builder + PyTorch Dataset
+│   ├── model.py               # M2 — DeviationClassifier (BiGRU)
+│   ├── train.py               # M2 — training loop, logging, checkpointing
+│   ├── test.py                # M3 — evaluation loop, metrics, confusion matrix
+│   ├── scoring.py             # M2 — labels_to_intervals, overall_score
+│   ├── visualization.py       # M4 — skeleton overlay, video renderer, charts
 │   └── feedback.py            # M4 — interval → plain-English sentences
 │
+├── checkpoints/
+│   └── best_model.pt          # saved after training
+│
+├── results/
+│   ├── training_log.csv       # epoch, train_loss, val_loss, val_f1
+│   ├── test_metrics.json      # final test-set F1, accuracy, confusion matrix
+│   └── phrase_XX/             # per-phrase analysis outputs (JSON + videos)
+│
+├── scripts/
+│   └── build_dataset.py       # M3 — generates train/val/test .npz from AIST++
+│
 ├── demo/
-│   └── app.py                 # M4 — Streamlit orchestrator
+│   └── app.py                 # M4 — Streamlit UI
 │
 ├── notebooks/
-│   ├── 01_pose_exploration.ipynb       # M1 — verify extractor output
-│   ├── 02_alignment_experiments.ipynb  # M2 — tune DTW
-│   └── 03_scoring_validation.ipynb     # M3 — ablation & threshold tuning
+│   ├── 01_pose_exploration.ipynb       # M1
+│   ├── 02_alignment_experiments.ipynb  # M2
+│   ├── 03_model_training_curves.ipynb  # M2 — plot loss/F1 curves
+│   └── 04_evaluation_analysis.ipynb    # M3 — confusion matrices, ablation table
 │
 ├── docs/
 │   └── final_report.md
 │
+├── main.py                    # CLI: extract / extract_all / train / test / analyze / batch
+├── slurm_run.sh               # SLURM job script for Oscar
 ├── requirements.txt
 └── README.md
 ```
@@ -408,38 +440,52 @@ Final_CV/
 ### Key Algorithmic Choices
 
 #### Pose Estimator
-- **MediaPipe Pose** (default): runs on CPU, no extra install, 33 landmarks (we use the 17 COCO-compatible subset)
-- **MMPose** (optional, GPU): higher accuracy on fast/partially occluded motion; swap in by changing `backend="mmpose"` in one place
+- **MediaPipe Pose** (default): CPU-friendly, no extra install
+- **MMPose** (optional, GPU): higher accuracy; swap in via `backend="mmpose"`
 
 #### Normalization
-1. **Center** — shift all joints so hip midpoint = (0, 0) each frame
-2. **Scale** — divide by torso length (neck midpoint to hip midpoint distance); eliminates height and camera-distance differences
+1. **Center** — hip midpoint → (0, 0) each frame
+2. **Scale** — divide by torso length; removes height and camera-distance effects
 
 #### DTW Alignment
-- Allows the learner to perform the sequence at a different speed without being penalized
 - Cost per frame pair = mean Euclidean distance across all 17 joints
-- Library: `fastdtw` — O(N) time and space, suitable for 15–30 fps × 15 seconds
+- Library: `fastdtw` — O(N) time/space; fast enough for 15 fps × 15 s clips
 
-#### `find_off_moments` Logic
-```
-for each body part p:
-    errors_p = per_part_error_over_time[p]   # shape (T',)
-    mask = errors_p > threshold              # boolean array
-    merge contiguous True runs into intervals
-    discard intervals shorter than 0.5 s     # noise filter
-    map frame indices back to timestamps     # using warping path
-```
+#### Difference Features (model input)
+- Per body part and per aligned frame: `[mean_x_err, mean_y_err, max_joint_err, mean_joint_err]`
+- 6 parts × 4 = **24-dimensional input vector per frame**
+- Normalized so values are in torso-length units (scale-invariant)
 
-#### Deviation Threshold
-- Default: `0.25` normalized units (roughly 25% of torso length)
-- Tuned empirically in `03_scoring_validation.ipynb` using the 3 test pairs
+#### BiGRU Classifier
+| Hyperparameter | Value |
+|----------------|-------|
+| Input size | 24 |
+| Hidden size | 64 |
+| Layers | 2 |
+| Bidirectional | Yes (effective hidden = 128) |
+| Dropout | 0.3 |
+| Output | 6 parts × 3 classes |
+| Loss | Weighted CrossEntropy ("off" class weight × 3) |
+| Optimizer | Adam, lr=1e-3, weight_decay=1e-4 |
+| Epochs | 30 (early stop by val F1) |
+| Batch size | 16 sequences (padded to same length) |
 
-#### Color Coding
-| Level | Threshold | Color |
-|-------|-----------|-------|
-| Good | error < 0.15 | Green `#2ecc71` |
-| Moderate | 0.15 – 0.35 | Yellow `#f39c12` |
-| Off | > 0.35 | Red `#e74c3c` |
+#### Ablation Study Design
+| Condition | Change | Expected effect |
+|-----------|--------|----------------|
+| **Full model** (baseline) | BiGRU + DTW + norm | — |
+| No temporal context | MLP per frame | Lower F1 on sustained deviations |
+| Unidirectional GRU | Remove backward pass | Slightly lower F1 |
+| No DTW | Naive frame-by-frame | Higher false positives from timing mismatch |
+| No normalization | Skip normalize() | Higher false positives from scale differences |
+| Fixed threshold | No model | Fragile, not adaptive to dance style |
+
+#### Color Coding (visualization)
+| Label | Class | Color |
+|-------|-------|-------|
+| Good | 0 | Green `#2ecc71` |
+| Moderate | 1 | Yellow `#f39c12` |
+| Off | 2 | Red `#e74c3c` |
 
 ---
 
@@ -447,26 +493,92 @@ for each body part p:
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| Pose estimator fails on fast / sideways motion | Medium | Confidence-based interpolation; fall back to MMPose on OSCAR |
+| AIST++ download is slow / large | Medium | Use pre-extracted 2D keypoints (much smaller than raw video) |
+| Geometric-threshold labels are too noisy for training | Medium | Increase "off" class weight in loss; inspect label quality in notebook |
+| BiGRU overfits on training choreographies | Medium | Dropout 0.3 + weight decay; hold out 5 choreographies for test |
+| Pose estimator fails on fast / sideways motion | Medium | Confidence filtering + interpolation; fall back to MMPose on Oscar |
 | DTW too slow at 30 fps | Low | Downsample to 15 fps before alignment |
-| Normalization fails when dancer is partially out of frame | Medium | Detect missing hip keypoints; skip normalization for those frames and flag to user |
-| "Off" intervals too noisy (single-frame spikes flagged) | Medium | Minimum interval length filter (0.5 s) + Savitzky-Golay smoothing |
-| Open-source clips have different camera angles | Medium | Restrict test pairs to frontal-camera clips; document as a known limitation |
+| Training time exceeds SLURM wall time | Low | 30 epochs on CPU ≈ 20 min; 1-hour wall time is sufficient |
 
 ---
 
 ## MVP Scope (must-have)
 
-- Extract keypoints from any two uploaded 10–15 second videos
-- Normalize for body size and camera distance
-- DTW temporal alignment
-- `find_off_moments()` → timestamped list of "off" intervals per body part
+- Pose extraction from any two uploaded 10–15 second videos
+- Normalization + DTW temporal alignment
+- Trained BiGRU classifier predicting good / moderate / off per frame per body part
+- `labels_to_intervals()` → timestamped "off" interval list
 - Plain-English feedback: "At X s – Y s your RIGHT ARM is off"
 - Side-by-side skeleton overlay video
-- Error timeline chart
+- Error timeline chart in Streamlit
 
 ## Stretch Goals (nice-to-have)
 
 - Live webcam capture instead of video upload
+- Confidence scores on each predicted interval
 - Exportable PDF summary report
 - Multi-angle support
+
+---
+
+## Code Review Log — 2026-04-19
+
+Full pass over every script to remove dead code, fix bugs, and align paths across
+documentation, SLURM, and the filesystem. Changes are grouped by file.
+
+### `helper/` → `scripts/` (directory rename)
+The helper scripts were living in `helper/` while all documentation, SLURM, and
+`build_dataset.py`'s own docstring referenced `scripts/`. Renamed the directory
+so every path is consistent.
+
+### `src/alignment.py`
+- Removed `_frame_distance()` — dead code; `fastdtw` is called with
+  `scipy.spatial.distance.euclidean` directly and `_frame_distance` was never
+  called anywhere in the project.
+
+### `src/scoring.py`
+- Removed `AnalysisResult` dataclass — never instantiated anywhere. Downstream
+  callers (`main.py`, `demo/app.py`) work directly with the individual return
+  values (`score`, `intervals`, `part_errors`).
+- Removed the now-unused `field` import from `dataclasses`.
+
+### `src/test.py`
+- **Bug fix — baseline accuracy crash**: `float(np.array(preds) == np.array(targets))`
+  raises `TypeError` because `float()` cannot convert a boolean array. Fixed to
+  `(np.array(...) == np.array(...)).mean()`.
+- **Bug fix — f-string format crash**: `f"(val_f1={ckpt_meta.get('val_f1', '?'):.4f})"`
+  raises `ValueError` when the key is absent and the default `'?'` (a string) is
+  formatted with `:.4f`. Fixed by extracting the value first and branching on its
+  type before formatting.
+
+### `src/visualization.py`
+- `render_comparison_video` — added optional `timestamps: np.ndarray | None`
+  parameter. When provided (from `warping_path_to_timestamps`), the red "off"
+  border and the per-frame timestamp label use DTW-accurate real time instead of
+  the naive `t / fps` approximation, which was misaligned after DTW warping.
+- `plot_error_timeline` — added optional `timestamps` parameter so the Plotly
+  x-axis can use the same DTW-accurate time axis that `find_off_moments` uses for
+  interval boundaries. Falls back to `np.arange(T) / fps` when not supplied.
+
+### `main.py`
+- Removed unused import `format_report` (from `feedback`) and `plot_error_timeline`
+  (from `visualization`). Both were imported at the top level but never called.
+- Removed the redundant `if args.checkpoint ... else` block in `task_analyze` that
+  printed different labels but ran identical `find_off_moments` calls in both
+  branches. Replaced with a single unconditional call.
+- `render_comparison_video` call now passes `timestamps=timestamps` so the video
+  border aligns correctly with the flagged intervals.
+
+### `demo/app.py`
+- Removed unused import `export_side_by_side` (from `video_io`).
+- Removed unused import `AnalysisResult` (from `scoring`; the dataclass was also
+  deleted from `scoring.py`).
+
+### `scripts/build_dataset.py`
+- Removed the `fps` parameter from `process_pair()` — it was declared and accepted
+  but never used inside the function body. The `--fps` CLI argument is retained in
+  `main()` for documentation purposes but is no longer forwarded.
+- Added a `None`-guard in `load_aist_keypoints()`: when the dict contains none of
+  the recognized keys (`keypoints2d`, `kps2d`, `joints2d`), the function now raises
+  a descriptive `ValueError` listing the actual keys instead of silently passing
+  `None` to `np.array()` and producing a confusing downstream error.

@@ -90,23 +90,27 @@ def render_comparison_video(
     user_frames: list[np.ndarray],
     bench_kp: KeypointSequence,
     user_kp: KeypointSequence,
-    joint_errors: np.ndarray,           # shape (T', 17)
+    joint_errors: np.ndarray,
     intervals: list[Interval],
     out_path: str,
     fps: float = 30.0,
+    timestamps: np.ndarray | None = None,
 ) -> None:
     """Write a side-by-side MP4 with color-coded skeleton overlays.
 
-    During "off" intervals, a red border is drawn on the user's panel.
+    During "off" intervals a red border is drawn on the user's panel.
 
     Parameters
     ----------
-    bench_frames, user_frames : frame lists (already aligned length T').
-    bench_kp, user_kp : KeypointSequence, shape (T', 17, 3) — pixel coords.
-    joint_errors : np.ndarray, shape (T', 17) from compute_joint_errors().
+    bench_frames, user_frames : frame lists (aligned length T').
+    bench_kp, user_kp : KeypointSequence shape (T', 17, 3) — pixel coords.
+    joint_errors : np.ndarray shape (T', 17).
     intervals : list[Interval] from find_off_moments().
     out_path : str — output .mp4 path.
     fps : float
+    timestamps : np.ndarray shape (T',) — real time in seconds for each aligned
+        frame (from warping_path_to_timestamps). If supplied, the red border
+        and timestamp label use DTW-accurate time; otherwise falls back to t/fps.
     """
     import os
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -116,25 +120,24 @@ def render_comparison_video(
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w * 2, h))
 
-    # Build a set of "off" frame indices per part for fast lookup
-    off_frames: set[int] = set()
-    for iv in intervals:
-        for t in range(int(iv.start_s * fps), int(iv.end_s * fps) + 1):
-            off_frames.add(t)
+    # Build sorted interval list of (start_s, end_s) for O(1) lookup per frame
+    off_spans = [(iv.start_s, iv.end_s) for iv in intervals]
+
+    def _is_off(t: int) -> bool:
+        t_s = float(timestamps[t]) if timestamps is not None else t / fps
+        return any(s <= t_s <= e for s, e in off_spans)
 
     for t in range(T):
-        errors_t = joint_errors[t]  # shape (17,)
+        t_s = float(timestamps[t]) if timestamps is not None else t / fps
+        errors_t = joint_errors[t]
 
         bf = overlay_skeleton(bench_frames[t], bench_kp[t])
         uf = overlay_skeleton(user_frames[t], user_kp[t], errors_t)
 
-        # Red border on user panel during off intervals
-        if t in off_frames:
+        if _is_off(t):
             cv2.rectangle(uf, (0, 0), (w - 1, h - 1), (0, 0, 220), 6)
 
-        # Timestamp overlay
-        ts = f"{t / fps:.1f}s"
-        cv2.putText(bf, ts, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX,
+        cv2.putText(bf, f"{t_s:.1f}s", (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     0.6, (200, 200, 200), 1, cv2.LINE_AA)
 
         combined = np.concatenate([bf, uf], axis=1)
@@ -147,10 +150,18 @@ def plot_error_timeline(
     part_errors: dict[str, np.ndarray],
     intervals: list[Interval],
     fps: float = 30.0,
+    timestamps: np.ndarray | None = None,
 ) -> go.Figure:
     """Plotly line chart: time (s) vs. per-part error, with shaded "off" regions.
 
-    Returns a Plotly Figure that can be displayed in Streamlit with st.plotly_chart().
+    Parameters
+    ----------
+    timestamps : np.ndarray or None
+        Real per-frame timestamps from warping_path_to_timestamps(). When
+        supplied the x-axis uses DTW-accurate time; otherwise falls back to
+        uniform t/fps spacing.
+
+    Returns a Plotly Figure for st.plotly_chart().
     """
     fig = go.Figure()
 
@@ -165,7 +176,7 @@ def plot_error_timeline(
 
     for part, errors in part_errors.items():
         T = len(errors)
-        times = np.arange(T) / fps
+        times = timestamps if timestamps is not None else np.arange(T) / fps
         fig.add_trace(go.Scatter(
             x=times, y=errors,
             mode="lines",

@@ -2,10 +2,9 @@
 pose_extraction.py — PoseEstimator wrapper, smoothing, and interpolation.
 Owner: Member 1
 
-Supports MediaPipe Pose (default, CPU) and MMPose (optional, GPU).
-Both backends produce keypoint arrays in the 17-joint COCO format.
+Uses the MediaPipe Solutions API (mediapipe==0.10.9, CPU-only, no model file needed).
 
-COCO joint index reference:
+Output: COCO 17-joint layout
   0 nose       1 L_eye    2 R_eye    3 L_ear    4 R_ear
   5 L_shoulder 6 R_shoulder 7 L_elbow 8 R_elbow
   9 L_wrist   10 R_wrist  11 L_hip  12 R_hip
@@ -14,26 +13,26 @@ COCO joint index reference:
 
 from __future__ import annotations
 
-import numpy as np
 from pathlib import Path
+
+import cv2
+import numpy as np
 from scipy.signal import savgol_filter
 
-# MediaPipe landmark indices that map to COCO 17-joint order
+# MediaPipe BlazePose 33-landmark → COCO 17-joint mapping
 _MP_TO_COCO: list[int] = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
-# KeypointSequence shape: (T, 17, 3)  — axis-2: [x_px, y_px, confidence]
-KeypointSequence = np.ndarray
+KeypointSequence = np.ndarray  # shape (T, 17, 3) — [x_px, y_px, confidence]
 
 
 class PoseEstimator:
-    """Wraps a pose estimation backend and exposes a unified API.
+    """Wraps MediaPipe Pose and exposes a unified extract API.
 
     Parameters
     ----------
-    backend : {"mediapipe", "mmpose"}
-        Which pose estimator to use. MediaPipe is the default; it runs on
-        CPU with no extra installation. MMPose requires a GPU and separate
-        setup but gives higher accuracy on fast or partially occluded motion.
+    backend : {"mediapipe"}
+        Only "mediapipe" supported locally. Kept as a parameter so MMPose
+        can be swapped in on Oscar without changing calling code.
     """
 
     def __init__(self, backend: str = "mediapipe") -> None:
@@ -48,11 +47,11 @@ class PoseEstimator:
             self._model = mp.solutions.pose.Pose(
                 static_image_mode=False,
                 model_complexity=1,
+                smooth_landmarks=True,
+                enable_segmentation=False,
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
-        elif self.backend == "mmpose":
-            raise NotImplementedError("MMPose backend not yet implemented.")
         else:
             raise ValueError(f"Unknown backend: {self.backend!r}")
 
@@ -62,25 +61,24 @@ class PoseEstimator:
         Returns
         -------
         np.ndarray, shape (17, 3)
-            Each row is [x_px, y_px, confidence] in pixel coordinates.
-            Confidence is 0.0 for joints not detected.
+            Each row is [x_px, y_px, visibility].
+            All zeros when no person is detected.
         """
         self._load_model()
-        import cv2
         h, w = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self._model.process(rgb)
 
-        if self.backend == "mediapipe":
-            result = self._model.process(rgb)
-            kp = np.zeros((17, 3), dtype=np.float32)
-            if result.pose_landmarks:
-                lm = result.pose_landmarks.landmark
-                for coco_idx, mp_idx in enumerate(_MP_TO_COCO):
-                    kp[coco_idx] = [lm[mp_idx].x * w,
-                                    lm[mp_idx].y * h,
-                                    lm[mp_idx].visibility]
-            return kp
-        raise NotImplementedError
+        kp = np.zeros((17, 3), dtype=np.float32)
+        if result.pose_landmarks:
+            lm = result.pose_landmarks.landmark
+            for coco_idx, mp_idx in enumerate(_MP_TO_COCO):
+                kp[coco_idx] = [
+                    lm[mp_idx].x * w,
+                    lm[mp_idx].y * h,
+                    lm[mp_idx].visibility,
+                ]
+        return kp
 
     def extract_sequence(self, frames: list[np.ndarray]) -> KeypointSequence:
         """Extract keypoints from a list of frames.
@@ -92,19 +90,23 @@ class PoseEstimator:
         return np.stack([self.extract(f) for f in frames], axis=0)
 
     def close(self) -> None:
-        if self._model is not None and self.backend == "mediapipe":
+        if self._model is not None:
             self._model.close()
-        self._model = None
+            self._model = None
 
 
 # ---------------------------------------------------------------------------
 # Post-processing
 # ---------------------------------------------------------------------------
 
-def smooth(seq: KeypointSequence, window: int = 7, polyorder: int = 2) -> KeypointSequence:
+def smooth(
+    seq: KeypointSequence,
+    window: int = 7,
+    polyorder: int = 2,
+) -> KeypointSequence:
     """Apply Savitzky-Golay filter along the time axis to reduce jitter.
 
-    Only smooths the x and y channels; confidence is left unchanged.
+    Only the x and y channels are smoothed; visibility is left unchanged.
     """
     seq = seq.copy()
     T = seq.shape[0]
@@ -120,7 +122,7 @@ def interpolate_missing(
     seq: KeypointSequence,
     confidence_threshold: float = 0.3,
 ) -> KeypointSequence:
-    """Fill frames where a joint's confidence is below threshold via linear interpolation."""
+    """Fill frames where a joint's visibility is below threshold via linear interpolation."""
     seq = seq.copy()
     T, J, _ = seq.shape
     for j in range(J):
@@ -131,7 +133,9 @@ def interpolate_missing(
         if len(good_idx) < 2:
             continue
         for ch in range(2):
-            seq[:, j, ch] = np.interp(np.arange(T), good_idx, seq[good_idx, j, ch])
+            seq[:, j, ch] = np.interp(
+                np.arange(T), good_idx, seq[good_idx, j, ch]
+            )
     return seq
 
 

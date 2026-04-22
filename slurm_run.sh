@@ -7,9 +7,12 @@
 # SLURM job script for Oscar
 #
 # Usage:
-#   sbatch slurm_run.sh extract_all          # extract keypoints for all videos
-#   sbatch slurm_run.sh analyze   phrase_01  # analyze one phrase pair
-#   sbatch slurm_run.sh batch                # analyze all phrase pairs
+#   sbatch slurm_run.sh extract_all          # Step 1: extract keypoints for all videos
+#   sbatch slurm_run.sh build_dataset        # Step 2: build train/val/test .npz files
+#   sbatch slurm_run.sh train                # Step 3: train the BiGRU classifier
+#   sbatch slurm_run.sh test                 # Step 4: evaluate on the test split
+#   sbatch slurm_run.sh analyze   phrase_01  # Inference: analyze one phrase pair
+#   sbatch slurm_run.sh batch                # Inference: analyze all phrase pairs
 #
 # Monitor your job:
 #   myq                      # check job status
@@ -21,14 +24,14 @@
 #SBATCH --gres=gpu:1
 #SBATCH -n 4
 #SBATCH --mem=16G
-#SBATCH -t 01:00:00
+#SBATCH -t 02:00:00
 #SBATCH -J dance_cv
 #SBATCH -o slurm-%j.out
 #SBATCH -e slurm-%j.err
 
 # ============================================================
 # Arguments
-#   $1  task name: extract_all | analyze | batch
+#   $1  task name: extract_all | build_dataset | train | test | analyze | batch
 #   $2  (analyze only) phrase directory name, e.g. phrase_01
 # ============================================================
 TASK=${1:-extract_all}
@@ -79,19 +82,53 @@ case "$TASK" in
       --out          "results/${PHRASE}/"
     ;;
 
+  build_dataset)
+    echo ">>> Building train/val/test .npz dataset from AIST++ keypoints"
+    python scripts/build_dataset.py \
+      --aist-dir     data/aist_keypoints/ \
+      --splits       data/splits.json \
+      --out-train    data/train/ \
+      --out-val      data/val/ \
+      --out-test     data/test/ \
+      --fps          15
+    ;;
+
+  train)
+    echo ">>> Training BiGRU DeviationClassifier"
+    python main.py train \
+      --train-dir    data/train/ \
+      --val-dir      data/val/ \
+      --checkpoint   checkpoints/best_model.pt \
+      --epochs       30 \
+      --lr           1e-3 \
+      --hidden       64 \
+      --layers       2 \
+      --dropout      0.3 \
+      --batch-size   16 \
+      --log          results/training_log.csv
+    ;;
+
+  test)
+    echo ">>> Evaluating on held-out test split"
+    python main.py test \
+      --test-dir     data/test/ \
+      --checkpoint   checkpoints/best_model.pt \
+      --out          results/test_metrics.json
+    ;;
+
   batch)
     echo ">>> Batch analyzing all phrase pairs in data/"
     python main.py batch \
       --data         data/ \
       --out          results/ \
       --fps          15 \
-      --threshold    0.25 \
+      --checkpoint   checkpoints/best_model.pt \
       --min-duration 0.5
     ;;
 
   *)
     echo "ERROR: Unknown task '$TASK'"
-    echo "Valid tasks: extract_all | analyze | batch"
+    echo "Valid tasks: extract_all | build_dataset | train | test | analyze | batch"
     exit 1
     ;;
 

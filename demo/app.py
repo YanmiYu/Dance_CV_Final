@@ -18,7 +18,7 @@ import streamlit as st
 # Make src/ importable when running from the project root
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from video_io import load_video, standardize, export_side_by_side
+from video_io import load_video, standardize
 from pose_extraction import PoseEstimator, smooth, interpolate_missing
 from normalization import normalize
 from alignment import dtw_align, warping_path_to_timestamps
@@ -27,7 +27,6 @@ from scoring import (
     per_part_error_over_time,
     find_off_moments,
     overall_score,
-    AnalysisResult,
 )
 from visualization import (
     render_comparison_video,

@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Data — large binaries not tracked in git
+data/phrase_*/benchmark.mp4
+data/phrase_*/learner.mp4
+data/phrase_*/keypoints/*.npy
+data/train/
+data/val/
+data/test/
+
+# Model weights & checkpoints
+checkpoints/
+models/
+
+# Generated results
+results/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store

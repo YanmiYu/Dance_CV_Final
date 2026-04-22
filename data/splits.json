@@ -1,0 +1,24 @@
+{
+  "_comment": "AIST++ choreography IDs split by genre. Update with actual IDs after downloading the dataset.",
+  "train": [
+    "gBR_sBM_cAll_d04", "gBR_sBM_cAll_d05", "gBR_sBM_cAll_d06",
+    "gHO_sBM_cAll_d04", "gHO_sBM_cAll_d05", "gHO_sBM_cAll_d06",
+    "gJB_sBM_cAll_d04", "gJB_sBM_cAll_d05", "gJB_sBM_cAll_d06",
+    "gJS_sBM_cAll_d04", "gJS_sBM_cAll_d05", "gJS_sBM_cAll_d06",
+    "gKR_sBM_cAll_d04", "gKR_sBM_cAll_d05", "gKR_sBM_cAll_d06",
+    "gLH_sBM_cAll_d04", "gLH_sBM_cAll_d05", "gLH_sBM_cAll_d06",
+    "gMH_sBM_cAll_d04", "gMH_sBM_cAll_d05"
+  ],
+  "val": [
+    "gPO_sBM_cAll_d04", "gPO_sBM_cAll_d05",
+    "gLO_sBM_cAll_d04", "gLO_sBM_cAll_d05",
+    "gWA_sBM_cAll_d04"
+  ],
+  "test": [
+    "gBR_sBM_cAll_d07",
+    "gHO_sBM_cAll_d07",
+    "gJB_sBM_cAll_d07",
+    "gJS_sBM_cAll_d07",
+    "gKR_sBM_cAll_d07"
+  ]
+}

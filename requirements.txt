@@ -1,8 +1,21 @@
+# Video & pose
 opencv-python>=4.9.0
-mediapipe>=0.10.0
+mediapipe==0.10.9
+
+# Numerical & alignment
 numpy>=1.26.0
 scipy>=1.12.0
 fastdtw>=0.3.4
+
+# Model training
+torch>=2.2.0
+torchvision>=0.17.0
+
+# Visualization & UI
 plotly>=5.20.0
 streamlit>=1.33.0
 Pillow>=10.3.0
+matplotlib>=3.8.0
+
+# Evaluation
+scikit-learn>=1.4.0

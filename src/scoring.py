@@ -12,7 +12,7 @@ Pipeline:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -57,16 +57,6 @@ class Interval:
             f"your {self.part.replace('_', ' ')} is off "
             f"(mean error {self.mean_error:.2f})."
         )
-
-
-@dataclass
-class AnalysisResult:
-    """Full output of the scoring pipeline."""
-    overall_score:   float
-    intervals:       list[Interval]
-    part_errors:     dict[str, np.ndarray]   # part → (T',) error time series
-    warping_path:    list[tuple[int, int]]
-    feedback_lines:  list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

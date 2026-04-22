@@ -18,17 +18,6 @@ from scipy.spatial.distance import euclidean
 KeypointSequence = np.ndarray  # shape (T, 17, 3)
 
 
-def _frame_distance(a: np.ndarray, b: np.ndarray) -> float:
-    """Mean Euclidean distance across all joints between two frames.
-
-    Parameters
-    ----------
-    a, b : np.ndarray, shape (17, 3)
-        Normalized keypoint frames (x, y, confidence).
-    """
-    return float(np.mean(np.linalg.norm(a[:, :2] - b[:, :2], axis=1)))
-
-
 def dtw_align(
     bench: KeypointSequence,
     user: KeypointSequence,
