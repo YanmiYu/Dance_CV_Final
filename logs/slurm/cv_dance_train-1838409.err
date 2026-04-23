@@ -1,0 +1,51 @@
+[ WARN:0@209.398] global loadsave.cpp:278 findDecoder imread_('data/raw_frames/aistpp/gHO_sFM_c01_d19_mHO3_ch04/gHO_sFM_c01_d19_mHO3_ch04_001840.jpg'): can't open/read file: check file path/integrity
+[ WARN:0@235.749] global loadsave.cpp:278 findDecoder imread_('data/raw_frames/aistpp/gHO_sFM_c01_d20_mHO3_ch14/gHO_sFM_c01_d20_mHO3_ch14_001840.jpg'): can't open/read file: check file path/integrity
+[ WARN:0@246.164] global loadsave.cpp:278 findDecoder imread_('data/raw_frames/aistpp/gHO_sFM_c01_d21_mHO5_ch20/gHO_sFM_c01_d21_mHO5_ch20_001704.jpg'): can't open/read file: check file path/integrity
+[ WARN:0@271.871] global loadsave.cpp:278 findDecoder imread_('data/raw_frames/aistpp/gHO_sFM_c01_d21_mHO3_ch18/gHO_sFM_c01_d21_mHO3_ch18_001840.jpg'): can't open/read file: check file path/integrity
+[ WARN:0@283.754] global loadsave.cpp:278 findDecoder imread_('data/raw_frames/aistpp/gHO_sFM_c01_d20_mHO1_ch09/gHO_sFM_c01_d20_mHO1_ch09_002000.jpg'): can't open/read file: check file path/integrity
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/train_pose.py", line 127, in <module>
+    main()
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/train_pose.py", line 105, in main
+    train_stats = train_one_epoch(ctx, train_loader, epoch)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/engine.py", line 198, in train_one_epoch
+    for step, batch in enumerate(loader):
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 701, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1445, in _next_data
+    return self._process_data(data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1491, in _process_data
+    data.reraise()
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/_utils.py", line 715, in reraise
+    raise exception
+ValueError: Caught ValueError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/utils/data/_utils/worker.py", line 351, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/utils/data/_utils/fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/site-packages/torch/utils/data/_utils/fetch.py", line 52, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/engine.py", line 40, in __getitem__
+    sample = self._inner[idx]
+             ~~~~~~~~~~~^^^^^
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/datasets/mixed_pose_dataset.py", line 76, in __getitem__
+    item = src.dataset[inner]
+           ~~~~~~~~~~~^^^^^^^
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/datasets/coco_pose_dataset.py", line 316, in __getitem__
+    heatmaps, weights = gaussian_heatmap(kps_hm, vis, self.heatmap_size, sigma=self.sigma)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/datasets/coco_pose_dataset.py", line 121, in gaussian_heatmap
+    heatmaps[j, img_y_lo:img_y_hi, img_x_lo:img_x_hi] = g[g_y_lo:g_y_hi, g_x_lo:g_x_hi]
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: could not broadcast input array from shape (13,13) into shape (13,14)
+
+srun: error: gpu2109: task 0: Exited with exit code 1

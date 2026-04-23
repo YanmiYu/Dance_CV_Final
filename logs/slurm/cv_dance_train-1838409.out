@@ -1,0 +1,67 @@
+## SLURM PROLOG ###############################################################
+##    Job ID : 1838409
+##  Job Name : cv_dance_train
+##  Nodelist : gpu2109
+##      CPUs : 1
+##  Mem/Node : 32768 MB
+## Directory : /oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice
+##   Job Started : Wed Apr 22 09:00:31 PM EDT 2026
+###############################################################################
+==============================================================
+job:        cv_dance_train (1838409)
+node:       gpu2109.oscar.ccv.brown.edu
+cwd:        /oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice
+cfg:        configs/train/train.yaml
+cpus/task:  8
+gpus:       1 (gres=?)
+==============================================================
+Wed Apr 22 21:00:33 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 575.57.08              Driver Version: 575.57.08      CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 3090        On  |   00000000:C1:00.0 Off |                  N/A |
+| 30%   31C    P8             26W /  350W |      17MiB /  24576MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A          174133      G   /usr/libexec/Xorg                         5MiB |
++-----------------------------------------------------------------------------------------+
+python: 3.11.15
+torch:  2.5.1+cu121
+cuda:   True NVIDIA GeForce RTX 3090
+==============================================================
+epoch 1 step 0 loss 13.50974
+epoch 1 step 50 loss 0.03852
+epoch 1 step 100 loss 0.01121
+epoch 1 step 150 loss 0.00730
+epoch 1 step 200 loss 0.00628
+epoch 1 step 250 loss 0.00726
+epoch 1 step 300 loss 0.00527
+epoch 1 step 350 loss 0.00551
+epoch 1 step 400 loss 0.00481
+epoch 1 step 450 loss 0.00460
+epoch 1 step 500 loss 0.00519
+epoch 1 step 550 loss 0.00473
+epoch 1 step 600 loss 0.00504
+epoch 1 step 650 loss 0.00663
+epoch 1 step 700 loss 0.00532
+epoch 1 step 750 loss 0.00475
+epoch 1 step 800 loss 0.00432
+epoch 1 step 850 loss 0.00440
+epoch 1 step 900 loss 0.00459
+epoch 1 step 950 loss 0.00482
+epoch 1 step 1000 loss 0.00455
+epoch 1 step 1050 loss 0.00591
+epoch 1 step 1100 loss 0.00450
+epoch 1 step 1150 loss 0.00446
+epoch 1 step 1200 loss 0.00489
+epoch 1 step 1250 loss 0.00439
