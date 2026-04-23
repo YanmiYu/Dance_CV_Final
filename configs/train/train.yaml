@@ -12,7 +12,12 @@ output_dir: data/processed/train
 dataset_mix:
   aistpp: 1.0
 
-epochs: 150
+# Empirically, val_pck01 on AIST++ 2D plateaus around 0.985 by ~epoch 6 on an
+# L40S (run 1839137). 150 epochs leaves the cosine LR near max during that
+# plateau, so val bounces. 30 epochs lets the 5-epoch warmup + cosine decay
+# (3e-4 -> 1e-6) fully play out after the model has converged, giving cleaner
+# final weights in ~1/5 the wall time.
+epochs: 30
 batch_size: 64
 num_workers: 6
 optimizer:
