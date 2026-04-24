@@ -64,6 +64,16 @@ training checkpoints saved under `data/processed/checkpoints/`.
 Revision (2026-04-22): narrowed supervised-label policy to AIST++ only,
 following the decision to train solely on `data/raw_videos/`.
 
+Revision (2026-04-23): clarified the meaning of "labels" in this section.
+External **unlabeled** images may be placed under
+`data/raw_backgrounds/` and used STRICTLY as background textures for
+augmentation (composite pasting in `src/datasets/detector_dataset.py`).
+They are never treated as training samples themselves, never produce a
+supervisory signal, and never carry any keypoint or bbox annotation.
+This is what makes the from-scratch detector robust to backgrounds that
+do not appear in AIST++. Pretrained model weights remain forbidden
+(section 1) and supervised pose / bbox labels remain AIST++-only.
+
 ## 7. Pipeline order (never skip forward)
 
 1. Repo skeleton + configs.

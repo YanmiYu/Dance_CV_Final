@@ -1,0 +1,51 @@
+decisions_ref: docs/project_decisions.md
+
+# Detector-specific data config. Supervision comes from the same AIST++
+# JSONL produced by scripts/prepare_aist_training_data.py: every row has
+# an accurate `bbox_xyxy`, which is all we need. See
+# docs/project_decisions.md sections 1 and 6.
+
+detector:
+  annotations:     data/labels/aistpp/internal_train.jsonl
+  val_annotations: data/labels/aistpp/internal_val.jsonl
+
+augmentations:
+  color_jitter:
+    brightness: 0.30
+    contrast: 0.30
+  gaussian_blur_prob: 0.20
+  motion_blur_prob: 0.10
+  jpeg_quality: [55, 95]
+  jpeg_prob: 0.30
+
+  horizontal_flip_prob: 0.50
+  scale_jitter: [0.8, 1.2]
+  translation_jitter_ratio: 0.10
+
+  # Noisy-background compositing -- the core trick that lets an AIST++-
+  # trained detector generalize to arbitrary user videos. On each training
+  # sample, with prob = noisy_bg_prob, the pixels OUTSIDE the dancer
+  # silhouette are replaced by one of:
+  #   - a random solid color           (mode 0)
+  #   - gaussian noise                 (mode 1)
+  #   - a real-world background image  (mode 2, see external_bg_dir)
+  noisy_bg_prob: 0.70
+  noisy_bg_weights: [1.0, 1.5, 3.0]
+  feather_ratio: 0.04
+
+  # External background-texture library. Drop ANY collection of real-world
+  # photos here (e.g., Places365 val ~36k, SUN397, your own room shots).
+  # These are used STRICTLY as composite backgrounds; they carry no labels
+  # and produce no supervisory signal -- see docs/project_decisions.md
+  # section 6 (revision 2026-04-23). When the directory is missing or
+  # empty, the "frame" mode silently falls back to a random AIST frame
+  # (legacy behavior; far less generalization).
+  external_bg_dir: data/raw_backgrounds
+
+  # Foreground isolation before pasting the dancer onto a new background.
+  # AIST videos have a near-uniform studio background, so a fast color-
+  # distance silhouette works well; switch to "grabcut" for higher quality
+  # at ~10x cost, or "none" to revert to the rectangular bbox paste.
+  silhouette_method: color           # one of: "color" | "grabcut" | "none"
+  silhouette_thresh: 28.0            # BGR L2 distance from background color
+  grabcut_iters: 2                   # only used when silhouette_method = grabcut

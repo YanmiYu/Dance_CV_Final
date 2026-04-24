@@ -1,0 +1,23 @@
+decisions_ref: docs/project_decisions.md
+
+# Single-person detector (Phase 6.3). CenterNet-style, trained FROM SCRATCH.
+# No pretrained weights, no ImageNet init. See docs/project_decisions.md
+# sections 1 and 2.
+
+name: person_detector
+pretrained: false
+init: kaiming
+
+backbone:
+  type: resnet_like
+  stem_channels: 64
+  stages:
+    - {channels: 64,  blocks: 2, stride: 1}
+    - {channels: 128, blocks: 2, stride: 2}
+    - {channels: 256, blocks: 2, stride: 2}
+    - {channels: 512, blocks: 2, stride: 2}
+
+head:
+  type: deconv
+  deconv_channels: [256, 128, 64]
+  deconv_kernels: [4, 4, 4]

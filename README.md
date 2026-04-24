@@ -25,9 +25,9 @@ scripts/            # orchestration / curation CLIs (incl. AIST prepare pipeline
 src/
   data/             # CSV parsing, manifests, downloading, AIST++ converter
   datasets/         # AIST++ pose dataset + mixed-source sampler
-  models/           # Simple Baseline, HRNet-W32, heads, losses, decode
-  train/            # training engine, metrics, eval
-  infer/            # motion crop, video pose inference, temporal smoothing
+  models/           # Simple Baseline, HRNet-W32, PersonDetector, heads, losses, decode
+  train/            # training engine (pose + detector), metrics, eval
+  infer/            # motion crop, learned person detector, video pose inference, temporal smoothing
   compare/          # normalize, features, DTW, score, feedback, report
   app/              # Streamlit demo (built last)
   utils/            # io, video, viz, seed, config
@@ -77,6 +77,68 @@ python -m scripts.prepare_aist_training_data \
 ```bash
 python -m src.train.train_pose --train configs/train/train.yaml
 ```
+
+## Single-person detector (optional, noisy-background robust)
+
+The pose model assumes a tight person bbox. In clean AIST++ studio clips the
+MOG2-based `MotionCropper` works, but for real user footage with messy
+backgrounds we train a dedicated, **from-scratch** single-person detector
+on the *same* AIST++ JSONL (the `bbox_xyxy` field on every row is the only
+supervision needed). See `docs/project_decisions.md` sections 1, 2 and 6.
+
+Architecture: CenterNet-style heatmap + size head on our own ResNet-like
+backbone (`src/models/person_detector.py`). No pretrained weights.
+
+Training:
+
+```bash
+python -m src.train.train_detector --train configs/train/train_detector.yaml
+```
+
+The training dataset (`src/datasets/detector_dataset.py`) includes a
+**noisy-background synthesizer** that, on each training sample, isolates
+the dancer with a fast color-distance silhouette (or optional GrabCut)
+and pastes them onto a random background drawn from:
+
+  - a real-world background-image library you provide (recommended),
+  - gaussian noise,
+  - a random solid color,
+  - or, as a fallback, a random other AIST++ frame.
+
+The real-world textures are what makes this work in arbitrary rooms;
+without them the detector is mostly limited to AIST-like studios. To set
+them up, drop ANY collection of unlabeled images into
+`data/raw_backgrounds/` (any subdirectory structure is fine):
+
+```bash
+mkdir -p data/raw_backgrounds
+# Recommended: ~5k+ varied indoor/outdoor photos, e.g.,
+#   - Places365 validation set (~36k images, CC, https://places2.csail.mit.edu/)
+#   - SUN397, OpenImages thumbnails, your own room shots, etc.
+```
+
+These images are used STRICTLY as augmentation textures -- they carry
+no labels and produce no supervisory signal. See
+`docs/project_decisions.md` section 6 (revision 2026-04-23). When the
+folder is missing or empty, the dataset silently falls back to AIST
+frames as backgrounds (less generalization).
+
+Using the trained detector at inference time:
+
+```bash
+python -m src.infer.run_pose_on_video \
+    --video path/to/clip.mp4 \
+    --model-config configs/model/simple_baseline.yaml \
+    --ckpt         data/processed/train/best.pt \
+    --detector-config configs/model/person_detector.yaml \
+    --detector-ckpt   data/processed/detector/best.pt \
+    --out-dir data/predictions/clip
+```
+
+When `--detector-ckpt` is omitted, the pipeline falls back to the legacy
+motion-based cropper. When provided, the detector predicts a bbox and the
+motion cropper is only used as a last-resort fallback if the detector's
+peak confidence is below threshold.
 
 ## Milestones (follow in order, never skip)
 

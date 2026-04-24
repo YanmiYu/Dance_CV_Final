@@ -40,6 +40,19 @@ Override the defaults (user `mwang264`, host `ssh.ccv.brown.edu`, remote root
 `~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice`) via env vars if
 needed, e.g. `OSCAR_USER=myuser bash scripts/push_to_oscar.sh`.
 
+If you're also going to train the detector (see section 4b), upload the
+external background-texture library too. Same pattern, separate script so
+the two uploads are independent:
+
+```bash
+# from the repo root on your laptop
+bash scripts/push_backgrounds_to_oscar.sh
+```
+
+This pushes `data/raw_backgrounds/` (~546 MB of Places365-val images by
+default) to `~/scratch/.../data/raw_backgrounds/` on Oscar. It's only
+needed for the detector; the pose model does not use it.
+
 If you'd rather run rsync directly, first create the remote parents over SSH,
 then rsync (Apple's rsync 2.6.9 does not support `--mkpath`, which is why the
 bare `rsync -av --mkpath ...` form fails on macOS):
@@ -113,6 +126,40 @@ To get email on finish/failure, edit `scripts/slurm/train_pose.sbatch` and
 set `--mail-user=your_email@brown.edu` (the `--mail-type=END,FAIL` line is
 already enabled).
 
+## 4b. Submit the detector training job
+
+The single-person detector (CenterNet-style, trained from scratch on AIST++
+bboxes — see `docs/project_decisions.md` sections 1, 2, 6) has its own
+sbatch file and runs independently of pose training.
+
+```bash
+sbatch scripts/slurm/train_detector.sbatch
+```
+
+Defaults: `--partition=gpu`, `--gres=gpu:1`, `--cpus-per-task=8`,
+`--mem=32G`, `--time=24:00:00`, config =
+`configs/train/train_detector.yaml`, checkpoints → `data/processed/detector/`.
+
+Before the full run, do a quick smoke test on the GPU node to catch
+environment / data-path issues in ~2 minutes:
+
+```bash
+sbatch --export=ALL,MAX_ITEMS=256,SMOKE_STEPS=100 \
+       scripts/slurm/train_detector.sbatch
+```
+
+To train a different detector config without editing the sbatch file:
+
+```bash
+sbatch --export=ALL,TRAIN_CFG=configs/train/train_detector_xyz.yaml \
+       scripts/slurm/train_detector.sbatch
+```
+
+The detector needs the external backgrounds uploaded in step 1
+(`data/raw_backgrounds/`); if the directory is missing at job time the
+dataset silently falls back to AIST frames, which hurts generalization —
+see `configs/data/detector_train.yaml`.
+
 ## 5. Monitor
 
 ```bash
@@ -124,7 +171,8 @@ scancel <jobid>                                           # cancel
 ```
 
 Checkpoints are written to `data/processed/train/` (`epoch_XXXX.pt`,
-`best.pt`, `last.pt`) per `configs/train/train.yaml`.
+`best.pt`, `last.pt`) per `configs/train/train.yaml`. Detector checkpoints
+go to `data/processed/detector/` per `configs/train/train_detector.yaml`.
 
 ## 6. Resume from a checkpoint
 

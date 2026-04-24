@@ -9,6 +9,8 @@ __pycache__/
 # Runtime data
 data/raw_videos/*
 !data/raw_videos/.gitkeep
+data/raw_backgrounds/*
+!data/raw_backgrounds/.gitkeep
 data/raw_frames/*
 !data/raw_frames/.gitkeep
 data/processed/*

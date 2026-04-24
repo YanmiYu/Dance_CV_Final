@@ -20,6 +20,7 @@ from src.datasets.coco_pose_dataset import get_affine_transform
 from src.datasets.common import NUM_JOINTS, bbox_to_center_scale
 from src.infer.bbox_smoother import EMABBoxSmoother
 from src.infer.motion_crop import MotionCropper
+from src.infer.person_detector import PersonDetectorRuntime
 from src.models.decode import decode_heatmaps_to_image
 from src.train.engine import build_model, _load_state_from_internal_ckpt  # noqa: F401
 from src.utils.config import load_yaml
@@ -51,6 +52,8 @@ def run(
     heatmap_size=(64, 48),
     init_bbox: Optional[tuple] = None,
     device: Optional[str] = None,
+    detector_config_path: Optional[str] = None,
+    detector_ckpt_path: Optional[str] = None,
 ):
     out_dir = ensure_dir(out_dir)
     model_cfg = load_yaml(model_config_path)
@@ -65,6 +68,14 @@ def run(
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
     meta = ffprobe_meta(video_path)
+
+    detector: Optional[PersonDetectorRuntime] = None
+    if detector_ckpt_path is not None:
+        if detector_config_path is None:
+            raise SystemExit("--detector-ckpt requires --detector-config.")
+        detector = PersonDetectorRuntime(
+            detector_config_path, detector_ckpt_path, device=str(device_t),
+        )
     cropper = MotionCropper()
     smoother = EMABBoxSmoother(alpha=0.35)
     if init_bbox is not None:
@@ -77,7 +88,12 @@ def run(
             ok, frame = cap.read()
             if not ok:
                 break
-            prop = cropper.propose(frame)
+            if detector is not None:
+                prop = detector.propose(frame)
+                if prop is None:
+                    prop = cropper.propose(frame)
+            else:
+                prop = cropper.propose(frame)
             smoothed = smoother.update(prop) if prop is not None else smoother.update(None)
             if smoothed is None:
                 h, w = frame.shape[:2]
@@ -133,6 +149,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--init-bbox", nargs=4, type=float, default=None, help="x1 y1 x2 y2 fallback bbox")
     p.add_argument("--input-size", nargs=2, type=int, default=[256, 192])
     p.add_argument("--heatmap-size", nargs=2, type=int, default=[64, 48])
+    p.add_argument(
+        "--detector-config",
+        default=None,
+        help="configs/model/person_detector.yaml; required with --detector-ckpt",
+    )
+    p.add_argument(
+        "--detector-ckpt",
+        default=None,
+        help="path to a trained detector checkpoint under data/processed/. "
+             "When provided, replaces the MOG2 motion crop.",
+    )
     return p
 
 
@@ -146,6 +173,8 @@ def main() -> None:
         input_size=tuple(args.input_size),
         heatmap_size=tuple(args.heatmap_size),
         init_bbox=tuple(args.init_bbox) if args.init_bbox else None,
+        detector_config_path=args.detector_config,
+        detector_ckpt_path=args.detector_ckpt,
     )
 
 
