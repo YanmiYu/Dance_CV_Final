@@ -1,0 +1,42 @@
+## SLURM PROLOG ###############################################################
+##    Job ID : 1872956
+##  Job Name : cv_dance_detector
+##  Nodelist : gpu2709
+##      CPUs : 1
+##  Mem/Node : 32768 MB
+## Directory : /oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice
+##   Job Started : Fri Apr 24 12:48:57 AM EDT 2026
+###############################################################################
+==============================================================
+job:        cv_dance_detector (1872956)
+node:       gpu2709.oscar.ccv.brown.edu
+cwd:        /oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice
+cfg:        configs/train/train_detector.yaml
+cpus/task:  8
+gpus:       1 (gres=?)
+extra:      --max-items 256 --smoke-steps 100
+==============================================================
+Fri Apr 24 00:48:59 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 575.57.08              Driver Version: 575.57.08      CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA L40S                    On  |   00000000:E1:00.0 Off |                    0 |
+| N/A   29C    P8             33W /  350W |      77MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A          157322      G   /usr/libexec/Xorg                        64MiB |
++-----------------------------------------------------------------------------------------+
+python: 3.11.15
+torch:  2.5.1+cu121
+cuda:   True NVIDIA L40S
+==============================================================

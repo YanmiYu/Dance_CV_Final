@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice/src/train/train_detector.py", line 327, in <module>
+    main()
+  File "/oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice/src/train/train_detector.py", line 285, in main
+    train_ds, val_ds = _build_datasets(data_cfg, train_cfg, args.max_items)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice/src/train/train_detector.py", line 174, in _build_datasets
+    train_ds = DetectorDataset(
+               ^^^^^^^^^^^^^^^^
+  File "/oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice/src/datasets/detector_dataset.py", line 160, in __init__
+    self.records: List[Dict] = list(read_jsonl(annotations_jsonl))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/oscar/home/mwang264/CV_Tool_for_Dance_Choreography_Practice/src/utils/io.py", line 40, in read_jsonl
+    with Path(path).open("r") as f:
+         ^^^^^^^^^^^^^^^^^^^^
+  File "/users/mwang264/.conda/envs/dance-cv/lib/python3.11/pathlib.py", line 1044, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'data/labels/aistpp/internal_train.jsonl'
+srun: error: gpu2709: task 0: Exited with exit code 1
