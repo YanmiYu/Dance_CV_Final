@@ -64,7 +64,7 @@ def task_extract(args: argparse.Namespace) -> None:
     print(f"[extract] {len(frames)} frames at {fps} fps")
 
     print(f"[extract] Running pose estimator ({args.backend})...")
-    estimator = PoseEstimator(backend=args.backend)
+    estimator = PoseEstimator(backend=args.backend, checkpoint=getattr(args, "checkpoint", None))
     kp_raw = estimator.extract_sequence(frames)
     estimator.close()
 
@@ -258,16 +258,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- extract ---
     p_ext = sub.add_parser("extract", help="Extract keypoints from one video")
-    p_ext.add_argument("--video",   required=True, help="Path to input .mp4")
-    p_ext.add_argument("--out",     required=True, help="Output .npy path")
-    p_ext.add_argument("--fps",     type=float, default=15.0)
-    p_ext.add_argument("--backend", default="mediapipe", choices=["mediapipe", "mmpose"])
+    p_ext.add_argument("--video",      required=True, help="Path to input .mp4")
+    p_ext.add_argument("--out",        required=True, help="Output .npy path")
+    p_ext.add_argument("--fps",        type=float, default=15.0)
+    p_ext.add_argument("--backend",    default="mediapipe", choices=["mediapipe", "mmpose", "simple_baseline"])
+    p_ext.add_argument("--checkpoint", default=None, help="Path to .pth checkpoint (simple_baseline only)")
 
     # --- extract_all ---
     p_ea = sub.add_parser("extract_all", help="Extract keypoints for all phrases in data/")
-    p_ea.add_argument("--data",    default="data/", help="Root data directory")
-    p_ea.add_argument("--fps",     type=float, default=15.0)
-    p_ea.add_argument("--backend", default="mediapipe", choices=["mediapipe", "mmpose"])
+    p_ea.add_argument("--data",       default="data/", help="Root data directory")
+    p_ea.add_argument("--fps",        type=float, default=15.0)
+    p_ea.add_argument("--backend",    default="mediapipe", choices=["mediapipe", "mmpose", "simple_baseline"])
+    p_ea.add_argument("--checkpoint", default=None, help="Path to .pth checkpoint (simple_baseline only)")
 
     # --- analyze ---
     p_an = sub.add_parser("analyze", help="Run full analysis on one benchmark/learner pair")
