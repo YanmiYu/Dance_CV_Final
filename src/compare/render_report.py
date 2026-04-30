@@ -107,9 +107,17 @@ def run(
     compare_config: str,
     out_root: str,
     render_video: bool = True,
+    alignment_method: str = "raw_features",
+    gnn_checkpoint: Optional[str] = None,
+    gnn_device: str = "auto",
+    gnn_batch_size: int = 256,
 ) -> Path:
     out_root = ensure_dir(out_root)
     cfg = load_yaml(compare_config)
+    if alignment_method not in {"raw_features", "gnn_embedding"}:
+        raise ValueError(f"unknown alignment_method: {alignment_method!r}")
+    if alignment_method == "gnn_embedding" and not gnn_checkpoint:
+        raise ValueError("--gnn-checkpoint is required when --alignment-method gnn_embedding")
 
     bench_pred = _run_pose_if_needed(
         benchmark_video, model_config, ckpt, out_root / "benchmark_pose"
@@ -140,12 +148,24 @@ def run(
     bench_feats = extract_features(bench_norm, bench_mask, feat_cfg)
     user_feats = extract_features(user_norm, user_mask, feat_cfg)
 
-    A = framewise_distance_vector(bench_feats)
-    B = framewise_distance_vector(user_feats)
+    embedding_dim: Optional[int] = None
+    if alignment_method == "raw_features":
+        A = framewise_distance_vector(bench_feats)
+        B = framewise_distance_vector(user_feats)
+        feature_weights = build_feature_weights(A.shape[1], 17)
+    else:
+        from src.compare.embedding_features import encode_pose_sequence, load_pose_gnn_encoder
+
+        model, device_t = load_pose_gnn_encoder(gnn_checkpoint, device=gnn_device)
+        A = encode_pose_sequence(model, bench_norm, device=device_t, batch_size=gnn_batch_size)
+        B = encode_pose_sequence(model, user_norm, device=device_t, batch_size=gnn_batch_size)
+        embedding_dim = int(A.shape[1]) if A.ndim == 2 else None
+        feature_weights = None
+
     dtw_cfg = DTWConfig(
         band_ratio=float(cfg.get("dtw", {}).get("band_ratio", 0.15)),
         warp_penalty=float(cfg.get("dtw", {}).get("warp_penalty", 0.05)),
-        feature_weights=build_feature_weights(A.shape[1], 17),
+        feature_weights=feature_weights,
     )
     dtw = dtw_align(A, B, dtw_cfg, fps=fps)
 
@@ -163,6 +183,13 @@ def run(
     report = {
         "benchmark_video": benchmark_video,
         "user_video": user_video,
+        "alignment": {
+            "method": alignment_method,
+            "feature_shape_benchmark": list(A.shape),
+            "feature_shape_user": list(B.shape),
+            "gnn_checkpoint": gnn_checkpoint if alignment_method == "gnn_embedding" else None,
+            "embedding_dim": embedding_dim,
+        },
         "fps_used_for_timing": fps,
         "dtw": {
             "cost": dtw.cost,
@@ -194,12 +221,31 @@ def _main() -> None:
     p.add_argument("--compare-config", default="configs/data/compare.yaml")
     p.add_argument("--out", default="data/reports/run_latest")
     p.add_argument("--no-video", action="store_true")
+    p.add_argument(
+        "--alignment-method",
+        default="raw_features",
+        choices=["raw_features", "gnn_embedding"],
+        help="raw_features keeps the baseline DTW features; gnn_embedding uses PoseGNNEncoder embeddings for DTW",
+    )
+    p.add_argument(
+        "--gnn-checkpoint",
+        default=None,
+        help="PoseGNNEncoder checkpoint required when --alignment-method gnn_embedding",
+    )
+    p.add_argument("--gnn-device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
+    p.add_argument("--gnn-batch-size", default=256, type=int)
     args = p.parse_args()
+    if args.alignment_method == "gnn_embedding" and not args.gnn_checkpoint:
+        p.error("--gnn-checkpoint is required when --alignment-method gnn_embedding")
     out = run(
         args.benchmark, args.user,
         args.model_config, args.ckpt,
         args.compare_config, args.out,
         render_video=not args.no_video,
+        alignment_method=args.alignment_method,
+        gnn_checkpoint=args.gnn_checkpoint,
+        gnn_device=args.gnn_device,
+        gnn_batch_size=args.gnn_batch_size,
     )
     print(f"report written to {out}")
 

@@ -26,3 +26,6 @@ data/manifests/*.jsonl
 
 # keep the AIST URL csv
 !data/raw_urls/*.csv
+
+data/keypoints2d/*.pkl
+data/videos/*.mp4
