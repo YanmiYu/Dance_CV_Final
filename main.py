@@ -180,7 +180,7 @@ def task_batch(args: argparse.Namespace) -> None:
 
     print(f"[batch] Found {len(phrase_dirs)} phrase directories.")
     for phrase_dir in phrase_dirs:
-        kp_dir = phrase_dir / "keypoints"
+        kp_dir = phrase_dir / getattr(args, "kp_dir", "keypoints")
         bench_kp_path   = kp_dir / "benchmark_kp.npy"
         learner_kp_path = kp_dir / "learner_kp.npy"
         bench_vid  = phrase_dir / "benchmark.mp4"
@@ -232,12 +232,14 @@ def task_extract_all(args: argparse.Namespace) -> None:
             if not vid.exists():
                 print(f"[extract_all] {vid} not found, skipping.")
                 continue
-            out = phrase_dir / "keypoints" / f"{role}_kp.npy"
+            kp_dir = getattr(args, "kp_dir", "keypoints")
+            out = phrase_dir / kp_dir / f"{role}_kp.npy"
             sub_args = argparse.Namespace(
-                video   = str(vid),
-                out     = str(out),
-                fps     = args.fps,
-                backend = args.backend,
+                video      = str(vid),
+                out        = str(out),
+                fps        = args.fps,
+                backend    = args.backend,
+                checkpoint = getattr(args, "checkpoint", None),
             )
             print(f"\n[extract_all] {phrase_dir.name}/{role}.mp4")
             task_extract(sub_args)
@@ -270,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ea.add_argument("--fps",        type=float, default=15.0)
     p_ea.add_argument("--backend",    default="mediapipe", choices=["mediapipe", "mmpose", "simple_baseline"])
     p_ea.add_argument("--checkpoint", default=None, help="Path to .pth checkpoint (simple_baseline only)")
+    p_ea.add_argument("--kp_dir",     default="keypoints", help="Subdirectory name for saved keypoints")
 
     # --- analyze ---
     p_an = sub.add_parser("analyze", help="Run full analysis on one benchmark/learner pair")
@@ -288,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ba = sub.add_parser("batch", help="Run analyze on all phrase dirs in data/")
     p_ba.add_argument("--data",         default="data/",    help="Root data directory")
     p_ba.add_argument("--out",          default="results/", help="Root results directory")
+    p_ba.add_argument("--kp_dir",       default="keypoints", help="Subdirectory name for keypoints")
     p_ba.add_argument("--fps",          type=float, default=15.0)
     p_ba.add_argument("--threshold",    type=float, default=0.25)
     p_ba.add_argument("--min-duration", type=float, default=0.5, dest="min_duration")

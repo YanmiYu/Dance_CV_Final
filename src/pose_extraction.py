@@ -86,6 +86,7 @@ class PoseEstimator:
         elif self.backend == "simple_baseline":
             import torch
             import sys
+            from ultralytics import YOLO
             sys.path.insert(0, str(Path(__file__).parent))
             from models.simple_baseline import SimpleBaseline
 
@@ -94,13 +95,15 @@ class PoseEstimator:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             model = SimpleBaseline(num_joints=17).to(device)
             state = torch.load(self.checkpoint, map_location=device)
-            # support both raw state_dict and checkpoint dicts
             if "state_dict" in state:
                 state = state["state_dict"]
             model.load_state_dict(state)
             model.eval()
             self._model = model
             self._device = device
+            self._detector = YOLO("yolov8n.pt")
+            self._bbox_cache = None       # cached bounding box
+            self._bbox_frame_count = 0    # frames since last detection
         elif self.backend == "mmpose":
             raise NotImplementedError("MMPose backend not yet implemented.")
         else:
@@ -117,11 +120,11 @@ class PoseEstimator:
         """
         self._load_model()
         import cv2
-        import mediapipe as mp
         h, w = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         if self.backend == "mediapipe":
+            import mediapipe as mp
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             result = self._model.detect(mp_image)
             kp = np.zeros((17, 3), dtype=np.float32)
@@ -138,29 +141,55 @@ class PoseEstimator:
             import cv2
 
             h, w = frame.shape[:2]
-            # Resize full frame to network input size (single-person assumption)
+
+            # ── 1. Detect person bounding box (every 10 frames) ───────────
+            DETECT_INTERVAL = 10
+            x1, y1, x2, y2 = 0, 0, w, h  # fallback: full frame
+            if self._bbox_cache is None or self._bbox_frame_count % DETECT_INTERVAL == 0:
+                results = self._detector(rgb, classes=[0], verbose=False)
+                if results and len(results[0].boxes) > 0:
+                    boxes = results[0].boxes.xyxy.cpu().numpy()
+                    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                    b = boxes[areas.argmax()]
+                    pad_x = (b[2] - b[0]) * 0.1
+                    pad_y = (b[3] - b[1]) * 0.1
+                    self._bbox_cache = (
+                        int(max(0, b[0] - pad_x)),
+                        int(max(0, b[1] - pad_y)),
+                        int(min(w, b[2] + pad_x)),
+                        int(min(h, b[3] + pad_y)),
+                    )
+            self._bbox_frame_count += 1
+            if self._bbox_cache is not None:
+                x1, y1, x2, y2 = self._bbox_cache
+
+            # ── 2. Crop and preprocess ─────────────────────────────────────
+            crop = rgb[y1:y2, x1:x2]
+            crop_h, crop_w = crop.shape[:2]
             img_h, img_w = _SB_IMAGE_SIZE
-            resized = cv2.resize(rgb, (img_w, img_h)).astype(np.float32) / 255.0
-            resized = (resized - _SB_MEAN) / _SB_STD                        # (H, W, 3)
-            tensor  = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0)  # (1, 3, H, W)
-            tensor  = tensor.to(self._device)
+            resized = cv2.resize(crop, (img_w, img_h)).astype(np.float32) / 255.0
+            resized = (resized - _SB_MEAN) / _SB_STD
+            tensor  = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0).to(self._device)
 
+            # ── 3. Run SimpleBaseline ──────────────────────────────────────
             with torch.no_grad():
-                heatmaps = self._model(tensor)   # (1, 17, 64, 48)
+                heatmaps = self._model(tensor)[0].cpu().numpy()  # (17, 64, 48)
 
-            heatmaps = heatmaps[0].cpu().numpy()  # (17, 64, 48)
             hm_h, hm_w = _SB_HEATMAP_SIZE
+            peak_vals = np.array([heatmaps[j].max() for j in range(17)])
+            max_peak  = peak_vals.max() if peak_vals.max() > 0 else 1.0
 
+            # ── 4. Map heatmap coords back to original frame ───────────────
             kp = np.zeros((17, 3), dtype=np.float32)
             for j in range(17):
                 hm = heatmaps[j]
-                flat_idx = hm.argmax()
+                flat_idx = int(hm.argmax())
                 hm_x = float(flat_idx % hm_w)
                 hm_y = float(flat_idx // hm_w)
-                # Scale heatmap coords back to original pixel space
-                kp[j, 0] = hm_x / hm_w * w
-                kp[j, 1] = hm_y / hm_h * h
-                kp[j, 2] = float(hm.max())   # peak value as confidence
+                # heatmap → crop → full frame
+                kp[j, 0] = (hm_x / hm_w) * crop_w + x1
+                kp[j, 1] = (hm_y / hm_h) * crop_h + y1
+                kp[j, 2] = float(peak_vals[j] / max_peak)
             return kp
 
         raise NotImplementedError
