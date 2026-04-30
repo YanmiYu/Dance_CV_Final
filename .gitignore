@@ -4,9 +4,9 @@ __pycache__/
 .DS_Store
 checkpoints/
 results/
-results_sb/
 results_mp/
 results_mediapipe/
+results_sb/**/*.mp4
 data/*/keypoints/*.npy
 data/*/keypoints_sb/
 data/*/keypoints_mp/
