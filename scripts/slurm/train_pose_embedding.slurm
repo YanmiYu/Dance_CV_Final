@@ -17,9 +17,9 @@ source scripts/slurm/activate_env.sh
 python -m src.train.train_pose_embedding \
   --keypoints-dir data/labels/aistpp/keypoints2d_raw \
   --epochs 50 \
-  --batch-size 128 \
+  --batch-size 64 \
   --lr 1e-3 \
   --negative-strategy different_video \
-  --device cuda \
+  --device cpu \
   --out checkpoints/pose_gnn_encoder_oscar.pt
 
