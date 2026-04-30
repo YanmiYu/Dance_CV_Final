@@ -1,0 +1,11 @@
+## SLURM PROLOG ###############################################################
+##    Job ID : 2050455
+##  Job Name : dance-gnn
+##  Nodelist : gpu2006
+##      CPUs : 
+##  Mem/Node : 32768 MB
+## Directory : /oscar/home/hding33/Desktop/Dance_CV_Final
+##   Job Started : Thu Apr 30 02:01:36 PM EDT 2026
+###############################################################################
+activated conda env: dance-cv
+python: /users/hding33/.conda/envs/dance-cv/bin/python

@@ -1,0 +1,15 @@
+/users/hding33/.local/lib/python3.11/site-packages/torch/cuda/__init__.py:180: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 12090). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:119.)
+  return torch._C._cuda_getDeviceCount() > 0
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/oscar/home/hding33/Desktop/Dance_CV_Final/src/train/train_pose_embedding.py", line 174, in <module>
+    main()
+  File "/oscar/home/hding33/Desktop/Dance_CV_Final/src/train/train_pose_embedding.py", line 170, in main
+    train(args)
+  File "/oscar/home/hding33/Desktop/Dance_CV_Final/src/train/train_pose_embedding.py", line 57, in train
+    device = _select_device(args.device)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/oscar/home/hding33/Desktop/Dance_CV_Final/src/train/train_pose_embedding.py", line 33, in _select_device
+    raise RuntimeError("requested --device cuda, but CUDA is not available")
+RuntimeError: requested --device cuda, but CUDA is not available
