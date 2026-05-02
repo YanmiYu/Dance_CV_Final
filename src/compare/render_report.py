@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -20,6 +21,7 @@ from src.compare.feedback import generate_feedback
 from src.compare.features import FeatureConfig, extract_features, framewise_distance_vector
 from src.compare.normalize_pose import NormalizeConfig, normalize_sequence
 from src.compare.score import ScoreConfig, compare_features, score_result_to_dict
+from src.datasets.common import NUM_JOINTS
 from src.infer.temporal_smooth import SmoothConfig, smooth_sequence
 from src.utils.config import load_yaml
 from src.utils.io import ensure_dir
@@ -40,6 +42,68 @@ def _run_pose_if_needed(
 
     _run(video_path, model_config, ckpt, str(out_dir))
     return out_dir
+
+
+def _load_pose_file(path: str | Path) -> np.ndarray:
+    """Load a raw AIST-style keypoint file as ``(T, 17, 3)`` float32 poses."""
+    path = Path(path)
+    if path.suffix == ".npy":
+        obj = np.load(path)
+    else:
+        with path.open("rb") as f:
+            obj = pickle.load(f)
+        if isinstance(obj, dict):
+            if "keypoints2d" not in obj:
+                raise ValueError(f"{path} is missing key 'keypoints2d'")
+            obj = obj["keypoints2d"]
+
+    poses = np.asarray(obj, dtype=np.float32)
+    if poses.ndim != 3 or poses.shape[1] != NUM_JOINTS or poses.shape[2] not in (2, 3):
+        raise ValueError(f"expected keypoints shape (T, 17, 2|3), got {poses.shape} in {path}")
+    if poses.shape[2] == 2:
+        conf = np.ones((*poses.shape[:2], 1), dtype=np.float32)
+        poses = np.concatenate([poses, conf], axis=-1)
+    return poses
+
+
+def _pose_from_file(video_path: str, pose_path: str | Path, out_dir: Path) -> Path:
+    """Materialize supplied keypoints into the same cache layout as pose inference."""
+    out_dir = ensure_dir(out_dir)
+    poses = _load_pose_file(pose_path)
+    np.save(out_dir / "poses.npy", poses)
+
+    video_meta = ffprobe_meta(video_path)
+    fps = video_meta.fps if video_meta.ok and video_meta.fps > 0 else 30.0
+    (out_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "video_path": str(video_path),
+                "keypoints_path": str(pose_path),
+                "source": "keypoints_file",
+                "fps": fps,
+                "num_frames": int(poses.shape[0]),
+                "width": video_meta.width if video_meta.ok else 0,
+                "height": video_meta.height if video_meta.ok else 0,
+                "duration_sec": video_meta.duration_sec if video_meta.ok else 0.0,
+            },
+            indent=2,
+        )
+    )
+    return out_dir
+
+
+def _resolve_pose_input(
+    video_path: str,
+    model_config: Optional[str],
+    ckpt: Optional[str],
+    out_dir: Path,
+    pose_file: Optional[str],
+) -> Path:
+    if pose_file:
+        return _pose_from_file(video_path, pose_file, out_dir)
+    if not model_config or not ckpt:
+        raise ValueError("--model-config and --ckpt are required unless a pose file is supplied")
+    return _run_pose_if_needed(video_path, model_config, ckpt, out_dir)
 
 
 def _render_bar_chart(per_part: Dict[str, float], path: Path) -> None:
@@ -102,8 +166,8 @@ def _render_side_by_side(
 def run(
     benchmark_video: str,
     user_video: str,
-    model_config: str,
-    ckpt: str,
+    model_config: Optional[str],
+    ckpt: Optional[str],
     compare_config: str,
     out_root: str,
     render_video: bool = True,
@@ -111,6 +175,8 @@ def run(
     gnn_checkpoint: Optional[str] = None,
     gnn_device: str = "auto",
     gnn_batch_size: int = 256,
+    bench_poses_pkl: Optional[str] = None,
+    user_poses_pkl: Optional[str] = None,
 ) -> Path:
     out_root = ensure_dir(out_root)
     cfg = load_yaml(compare_config)
@@ -119,11 +185,11 @@ def run(
     if alignment_method == "gnn_embedding" and not gnn_checkpoint:
         raise ValueError("--gnn-checkpoint is required when --alignment-method gnn_embedding")
 
-    bench_pred = _run_pose_if_needed(
-        benchmark_video, model_config, ckpt, out_root / "benchmark_pose"
+    bench_pred = _resolve_pose_input(
+        benchmark_video, model_config, ckpt, out_root / "benchmark_pose", bench_poses_pkl
     )
-    user_pred = _run_pose_if_needed(
-        user_video, model_config, ckpt, out_root / "user_pose"
+    user_pred = _resolve_pose_input(
+        user_video, model_config, ckpt, out_root / "user_pose", user_poses_pkl
     )
 
     bench_raw = np.load(bench_pred / "poses.npy")
@@ -216,8 +282,10 @@ def _main() -> None:
     p = argparse.ArgumentParser(description="End-to-end comparison report from two videos.")
     p.add_argument("--benchmark", required=True)
     p.add_argument("--user", required=True)
-    p.add_argument("--model-config", required=True)
-    p.add_argument("--ckpt", required=True)
+    p.add_argument("--model-config", default=None)
+    p.add_argument("--ckpt", default=None)
+    p.add_argument("--bench-poses-pkl", default=None, help="AIST-style benchmark keypoints .pkl/.npy with shape (T,17,2|3)")
+    p.add_argument("--user-poses-pkl", default=None, help="AIST-style user keypoints .pkl/.npy with shape (T,17,2|3)")
     p.add_argument("--compare-config", default="configs/data/compare.yaml")
     p.add_argument("--out", default="data/reports/run_latest")
     p.add_argument("--no-video", action="store_true")
@@ -237,6 +305,8 @@ def _main() -> None:
     args = p.parse_args()
     if args.alignment_method == "gnn_embedding" and not args.gnn_checkpoint:
         p.error("--gnn-checkpoint is required when --alignment-method gnn_embedding")
+    if (not args.bench_poses_pkl or not args.user_poses_pkl) and (not args.model_config or not args.ckpt):
+        p.error("--model-config and --ckpt are required for any video without --*-poses-pkl")
     out = run(
         args.benchmark, args.user,
         args.model_config, args.ckpt,
@@ -246,6 +316,8 @@ def _main() -> None:
         gnn_checkpoint=args.gnn_checkpoint,
         gnn_device=args.gnn_device,
         gnn_batch_size=args.gnn_batch_size,
+        bench_poses_pkl=args.bench_poses_pkl,
+        user_poses_pkl=args.user_poses_pkl,
     )
     print(f"report written to {out}")
 

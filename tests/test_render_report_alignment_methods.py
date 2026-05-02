@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 
 pytest.importorskip("matplotlib")
 pytest.importorskip("scipy")
+pytest.importorskip("cv2")
 torch = pytest.importorskip("torch")
 
 
@@ -30,6 +32,11 @@ def _write_cached_pose(run_dir: Path, name: str, poses: np.ndarray) -> None:
     (pred / "meta.json").write_text(
         json.dumps({"fps": 30.0, "num_frames": int(poses.shape[0]), "width": 640, "height": 480})
     )
+
+
+def _write_pose_pkl(path: Path, poses: np.ndarray) -> None:
+    with path.open("wb") as f:
+        pickle.dump({"keypoints2d": poses}, f)
 
 
 def _write_compare_config(path: Path) -> None:
@@ -88,6 +95,38 @@ def test_render_report_raw_features_smoke(tmp_path: Path) -> None:
     assert report["alignment"]["method"] == "raw_features"
     assert report["alignment"]["feature_shape_benchmark"][0] == 40
     assert "scores" in report
+
+
+def test_render_report_loads_pose_pkls_without_detector_config(tmp_path: Path) -> None:
+    from src.compare.render_report import run
+
+    run_dir = tmp_path / "report"
+    cfg = tmp_path / "compare.yaml"
+    _write_compare_config(cfg)
+    bench_pkl = tmp_path / "bench.pkl"
+    user_pkl = tmp_path / "user.pkl"
+    _write_pose_pkl(bench_pkl, _make_seq(40, phase=0.0))
+    _write_pose_pkl(user_pkl, _make_seq(38, phase=0.1))
+
+    out = run(
+        "benchmark.mp4",
+        "user.mp4",
+        None,
+        None,
+        str(cfg),
+        str(run_dir),
+        render_video=False,
+        bench_poses_pkl=str(bench_pkl),
+        user_poses_pkl=str(user_pkl),
+    )
+
+    bench_meta = json.loads((out / "benchmark_pose" / "meta.json").read_text())
+    user_meta = json.loads((out / "user_pose" / "meta.json").read_text())
+    report = json.loads((out / "report.json").read_text())
+    assert bench_meta["source"] == "keypoints_file"
+    assert user_meta["source"] == "keypoints_file"
+    assert np.load(out / "benchmark_pose" / "poses.npy").shape == (40, 17, 3)
+    assert report["alignment"]["feature_shape_benchmark"][0] == 40
 
 
 def test_render_report_gnn_embedding_smoke(tmp_path: Path) -> None:
