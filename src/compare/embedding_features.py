@@ -7,7 +7,7 @@ from ``normalize_pose.normalize_sequence`` into ``encode_pose_sequence``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import torch
@@ -79,3 +79,83 @@ def encode_pose_sequence(
     if not outs:
         return np.zeros((0, model.embedding_dim), dtype=np.float32)
     return torch.cat(outs, dim=0).numpy().astype(np.float32, copy=False)
+
+
+def compute_embedding_similarity(
+    emb_a: np.ndarray,
+    emb_b: np.ndarray,
+    aligned_a_idx: np.ndarray,
+    aligned_b_idx: np.ndarray,
+) -> Dict[str, float]:
+    """Score how close two embedding sequences are along an alignment path.
+
+    The encoder L2-normalizes its outputs, so we use cosine similarity (the
+    natural metric for unit-norm vectors) and convert it to a 0-100 score.
+    Returns a dict with the mean / median / min cosine similarity, the mean
+    Euclidean distance, and the final ``score`` in ``[0, 100]``.
+    """
+    aligned_a_idx = np.asarray(aligned_a_idx, dtype=np.int64)
+    aligned_b_idx = np.asarray(aligned_b_idx, dtype=np.int64)
+    L = int(min(aligned_a_idx.shape[0], aligned_b_idx.shape[0]))
+    if L == 0 or emb_a.size == 0 or emb_b.size == 0:
+        return {
+            "score": 0.0,
+            "mean_cosine_similarity": 0.0,
+            "median_cosine_similarity": 0.0,
+            "min_cosine_similarity": 0.0,
+            "mean_distance": 0.0,
+            "num_aligned_steps": 0,
+        }
+
+    a = emb_a[aligned_a_idx[:L]].astype(np.float32, copy=False)
+    b = emb_b[aligned_b_idx[:L]].astype(np.float32, copy=False)
+    # Re-normalize defensively in case caller passes unnormalized rows.
+    a_norm = np.linalg.norm(a, axis=1, keepdims=True)
+    b_norm = np.linalg.norm(b, axis=1, keepdims=True)
+    a = a / np.clip(a_norm, 1e-8, None)
+    b = b / np.clip(b_norm, 1e-8, None)
+
+    cos = np.sum(a * b, axis=1)            # (L,) in [-1, 1]
+    dist = np.linalg.norm(a - b, axis=1)   # (L,) in [0, 2]
+    mean_cos = float(np.mean(cos))
+    median_cos = float(np.median(cos))
+    min_cos = float(np.min(cos))
+    mean_dist = float(np.mean(dist))
+    score = float(max(0.0, mean_cos)) * 100.0   # cos in [0,1] -> score in [0,100]
+    return {
+        "score": score,
+        "mean_cosine_similarity": mean_cos,
+        "median_cosine_similarity": median_cos,
+        "min_cosine_similarity": min_cos,
+        "mean_distance": mean_dist,
+        "num_aligned_steps": int(L),
+    }
+
+
+def pairwise_cosine_similarity(emb_a: np.ndarray, emb_b: np.ndarray) -> np.ndarray:
+    """Return the full frame-to-frame cosine similarity matrix.
+
+    ``emb_a`` is interpreted as benchmark embeddings ``(T_a, D)`` and
+    ``emb_b`` as user embeddings ``(T_b, D)``. The output has shape
+    ``(T_a, T_b)`` so rows are benchmark frames and columns are user frames.
+    Rows are normalized defensively even though ``PoseGNNEncoder`` already
+    emits L2-normalized embeddings.
+    """
+    emb_a = np.asarray(emb_a, dtype=np.float32)
+    emb_b = np.asarray(emb_b, dtype=np.float32)
+    if emb_a.ndim != 2 or emb_b.ndim != 2:
+        raise ValueError(
+            f"expected 2D embedding arrays, got {emb_a.shape} and {emb_b.shape}"
+        )
+    if emb_a.shape[1] != emb_b.shape[1]:
+        raise ValueError(
+            f"embedding dimensions differ: {emb_a.shape[1]} vs {emb_b.shape[1]}"
+        )
+    if emb_a.shape[0] == 0 or emb_b.shape[0] == 0:
+        return np.zeros((emb_a.shape[0], emb_b.shape[0]), dtype=np.float32)
+
+    a_norm = np.linalg.norm(emb_a, axis=1, keepdims=True)
+    b_norm = np.linalg.norm(emb_b, axis=1, keepdims=True)
+    a = emb_a / np.clip(a_norm, 1e-8, None)
+    b = emb_b / np.clip(b_norm, 1e-8, None)
+    return np.clip(a @ b.T, -1.0, 1.0).astype(np.float32, copy=False)

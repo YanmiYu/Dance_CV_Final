@@ -94,6 +94,8 @@ def test_render_report_raw_features_smoke(tmp_path: Path) -> None:
     report = json.loads((out / "report.json").read_text())
     assert report["alignment"]["method"] == "raw_features"
     assert report["alignment"]["feature_shape_benchmark"][0] == 40
+    assert report["raw_overall_score"] == pytest.approx(report["scores"]["overall_score"])
+    assert report["pose_geometry_score"] == pytest.approx(report["scores"]["pose_geometry_score"])
     assert "scores" in report
 
 
@@ -155,3 +157,8 @@ def test_render_report_gnn_embedding_smoke(tmp_path: Path) -> None:
     assert report["alignment"]["feature_shape_benchmark"] == [40, 128]
     assert report["alignment"]["feature_shape_user"] == [38, 128]
     assert report["alignment"]["embedding_dim"] == 128
+    assert report["raw_overall_score"] == pytest.approx(report["scores"]["overall_score"])
+    assert report["pose_geometry_score"] == pytest.approx(report["scores"]["pose_geometry_score"])
+    assert report["embedding_similarity_heatmap"] == "embedding_similarity_heatmap.png"
+    assert (out / "embedding_similarity_heatmap.png").exists()
+    assert report["embedding_similarity_heatmap_stats"]["shape"] == [40, 38]

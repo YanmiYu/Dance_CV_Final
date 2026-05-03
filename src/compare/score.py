@@ -53,6 +53,10 @@ class ScoreResult:
     worst_windows: List[Tuple[float, float, float]]  # (start, end, score)
     worst_parts: List[Tuple[str, float]]
     timing_skew_sec: float
+    aligned_joint_err: np.ndarray = field(default_factory=lambda: np.zeros((0, 17), dtype=np.float32))
+    aligned_a_idx: np.ndarray = field(default_factory=lambda: np.zeros((0,), dtype=np.int64))
+    aligned_b_idx: np.ndarray = field(default_factory=lambda: np.zeros((0,), dtype=np.int64))
+    reference_error: float = 1.0
 
 
 def _err_to_score_0_100(mean_err: float, ref_err: float) -> float:
@@ -197,6 +201,10 @@ def compare_features(
         worst_windows=worst_windows,
         worst_parts=worst_parts,
         timing_skew_sec=float(dtw.timing_skew_sec),
+        aligned_joint_err=joint_err.astype(np.float32, copy=False),
+        aligned_a_idx=np.asarray(a_idx, dtype=np.int64),
+        aligned_b_idx=np.asarray(b_idx, dtype=np.int64),
+        reference_error=float(ref_err),
     )
 
 

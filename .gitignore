@@ -29,3 +29,5 @@ data/manifests/*.jsonl
 
 data/keypoints2d/*.pkl
 data/videos/*.mp4
+logs/slurm/*.out
+logs/slurm/*.err
