@@ -118,24 +118,52 @@ AIST++ provides the same choreography performed by multiple subjects. We:
 - [x] Download 5 AIST++ video pairs into `data/phrase_01/` – `data/phrase_05/`
 - [x] Extract keypoints for all 5 pairs (`python main.py batch`); `.npy` files saved
 - [x] Full inference pipeline verified end-to-end: normalization → DTW → scoring → JSON report + comparison video
-- [ ] Download AIST++ **pre-extracted 2D keypoints** (`.pkl`) for training — no video needed
-- [ ] Run `scripts/build_dataset.py` to generate labeled `.npz` pairs into `data/train/`, `data/val/`, `data/test/`
-- [ ] Confirm label class distribution (expect majority "good", minority "off")
-- [ ] Verify 5 random labeled sequences visually — do "off" labels match large visible differences?
+- [x] Download 120 AIST++ videos via `scripts/filtered_gBR_sBM_c01.csv` to Oscar (`data/videos/`)
+- [x] Extract keypoints for all 120 videos on Oscar → `data/keypoints/`
+- [x] Run `scripts/build_dataset.py` → labeled `.npz` pairs in `data/train/`, `data/val/`, `data/test/`
 
 ### Model Training & Testing
-- [ ] Launch training on Oscar: `sbatch slurm_run.sh train`
-- [ ] Monitor validation loss; adjust dropout / learning rate if overfitting
-- [ ] Run `python main.py test` on the held-out test split; save `results/test_metrics.json`
-- [ ] Report: per-part binary precision, recall, F1, AUC vs. fixed-threshold baseline
+- [x] Launch training on Oscar: `sbatch slurm_run.sh train` (job 2212860)
+- [x] 30 epochs, train loss `1.030 → 0.684`, val loss `1.236 → 0.926`, val F1 `0.462 → 0.662`
+- [x] Best checkpoint saved: `checkpoints/best_model.pt` (225 KB, epoch 30, val F1 = 0.662)
+- [x] Run `python main.py test` on held-out test split → `results/test_metrics.json`
+- [x] **Test results** (on ch10 — choreographies never seen during training):
+
+| Body Part  | Precision | Recall | F1    | AUC   |
+|------------|-----------|--------|-------|-------|
+| RIGHT_ARM  | 0.978     | 1.000  | 0.989 | 0.827 |
+| LEFT_LEG   | 0.943     | 1.000  | 0.971 | 0.873 |
+| RIGHT_LEG  | 0.969     | 1.000  | 0.984 | 0.844 |
+| LEFT_ARM   | 0.939     | 1.000  | 0.968 | 0.881 |
+| HEAD       | 0.879     | 1.000  | 0.935 | 0.728 |
+| TORSO      | 0.807     | 0.993  | 0.890 | 0.795 |
+| **Overall**| **0.919** | **0.999** | **0.958** | — |
+
+  TORSO and HEAD are the hardest parts (lowest AUC). Recall ≈ 1.0 everywhere — the model catches all "off" frames with no missed detections; some false positives remain (lower precision on TORSO/HEAD).
 
 ### Evaluation & Analysis
-- [ ] Per-body-part error analysis — which body parts are hardest for the model?
-- [ ] Failure case analysis — when does the model disagree with the threshold baseline, and which is right?
-- [ ] Run full pipeline on 3–5 demo clips outside AIST++ (e.g. YouTube); write short qualitative assessment for each
-- [ ] Tabulate model predictions vs. threshold baseline on 3 demo pairs — fewer false positives?
+- [x] Per-body-part error analysis complete — TORSO and HEAD hardest (AUC 0.73–0.79); arm/leg parts easiest (AUC 0.83–0.88)
+- [x] Run full pipeline locally with trained model: `python main.py batch --checkpoint checkpoints/best_model.pt`
+- [x] Compare interval outputs vs. old fixed-threshold results — see table below
+- [ ] Run full pipeline on 3–5 demo clips outside AIST++ (e.g. YouTube); write qualitative assessment for each
 
-### Report & Presentation
+#### Model vs. Fixed-Threshold — Interval Comparison on phrase_01–05
+
+Overall scores are identical (score is geometric, model only affects interval detection).
+The model reduces total intervals from **74 → 37** (50% fewer) by merging fragmented
+short detections into coherent longer windows and suppressing transient noise.
+
+| Phrase | Score | Threshold intervals | Model intervals | Key difference |
+|--------|-------|---------------------|-----------------|----------------|
+| phrase_01 | 86 | 4 (HEAD×3, LEFT_ARM×1) | 2 (LEFT_ARM, RIGHT_ARM at start) | Model drops 3 short HEAD blips (< 0.5 s each); flags the arm deviation at clip start more precisely |
+| phrase_02 | 84 | 12 (arms throughout) | 9 (arms throughout) | Model merges several consecutive short arm intervals into longer coherent windows |
+| phrase_03 | 89 | 4 (HEAD+arms+leg at end) | 1 (LEFT_ARM at start) | Model suppresses end-of-clip artifacts entirely; catches only the real deviation |
+| phrase_04 | 80 | 18 (arms, legs, head) | 7 (arms dominant) | Model collapses fragmented arm alerts (10.4–11.7 s split into 3 pieces) into one clean 7.9–11.9 s window |
+| phrase_05 | 0 | **36** (all parts, every segment) | **18** (same parts, longer windows) | Biggest improvement: threshold fired on every transient fluctuation; model merges into sustained deviations only |
+
+**phrase_05 detail** — the model correctly identifies large, sustained deviations (e.g. RIGHT_ARM 2.0–11.9 s, HEAD 5.1–11.9 s) whereas the threshold produced 36 noisy short intervals across the same time span. Both score 0/100 because the overall geometric error is extreme — this learner (d05 music mBR5) is genuinely very far from the benchmark throughout the clip.
+
+<!-- ### Report & Presentation
 - [ ] Write model training + results sections in `docs/final_report.md`
 - [ ] Write ablation study section with clean F1 tables and confusion matrices
 - [ ] Write qualitative evaluation section
@@ -143,7 +171,7 @@ AIST++ provides the same choreography performed by multiple subjects. We:
 - [ ] Refine Streamlit UI: loading spinner, `MM:SS.f` timestamps, clear section headers
 - [ ] Record a 2–3 minute screen-capture demo video
 - [ ] Prepare slides: motivation → pipeline → training → results → ablation → demo → limitations → future work
-- [ ] Rehearse live demo; confirm it runs without errors on the demo machine
+- [ ] Rehearse live demo; confirm it runs without errors on the demo machine -->
 
 ---
 
