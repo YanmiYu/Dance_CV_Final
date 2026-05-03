@@ -50,10 +50,10 @@ echo "============================================"
 # ---- Environment setup ----
 cd "$SLURM_SUBMIT_DIR"
 
-# Load Oscar modules (use module spider python/cuda/ffmpeg to find exact names)
+# Load Oscar modules
 module load python/3.9.21s-rv63
-module load cuda/12.1.1-txhkv4h          # update if your Oscar has a different cuda
-module load ffmpeg                        # update with versioned name if needed
+module load cuda/11.8.0-kuhf
+module load ffmpeg/7.1-7dmq
 
 # Activate virtual environment
 # Create it once with:  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
