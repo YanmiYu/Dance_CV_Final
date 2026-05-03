@@ -1,9 +1,8 @@
 """
-test.py — Evaluation of the trained BiGRU DeviationClassifier on the held-out test split.
-Owner: Member 3
+test.py — Evaluation of the trained LSTM TemporalErrorDetector on the held-out test split.
 
-Reports per-class accuracy, macro F1, weighted F1, and per-body-part confusion matrices.
-Also computes a fixed-threshold baseline for comparison.
+Reports per-part binary precision, recall, F1, and accuracy, plus
+a fixed-threshold baseline for comparison.
 
 Launch via main.py:
     python main.py test --test-dir data/test/ \
@@ -18,24 +17,19 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    f1_score,
-)
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from torch.utils.data import DataLoader
 
 from dataset import DanceDeviationDataset, collate_fn, PART_ORDER, N_PARTS
 from model import load_checkpoint
-from scoring import THRESHOLD_GOOD, THRESHOLD_MODERATE
-
-CLASS_NAMES = ["good", "moderate", "off"]
+from scoring import THRESHOLD_MODERATE
 
 
 def evaluate(
     test_dir: str,
     checkpoint_path: str,
     out_path: str = "results/test_metrics.json",
+    prob_threshold: float = 0.5,
     device: str | None = None,
 ) -> dict:
     """Run evaluation on the test split and save metrics to JSON.
@@ -46,115 +40,113 @@ def evaluate(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[test] Device: {device}")
 
-    # Load data
     test_ds = DanceDeviationDataset(test_dir)
     loader  = DataLoader(test_ds, batch_size=16, shuffle=False,
                          collate_fn=collate_fn, num_workers=2)
     print(f"[test] Test samples: {len(test_ds)}")
 
-    # Load model
     model, ckpt_meta = load_checkpoint(checkpoint_path, device=device)
-    epoch  = ckpt_meta.get('epoch', '?')
-    val_f1 = ckpt_meta.get('val_f1')
+    epoch  = ckpt_meta.get("epoch", "?")
+    val_f1 = ckpt_meta.get("val_f1")
     f1_str = f"{val_f1:.4f}" if isinstance(val_f1, float) else "?"
     print(f"[test] Loaded checkpoint from epoch {epoch} (val_f1={f1_str})")
 
-    # Collect predictions
-    all_preds   = []   # list of (N,) tensors
-    all_targets = []
+    # Collect per-part predictions across the whole test set
+    all_probs_by_part   = [[] for _ in range(N_PARTS)]
+    all_targets_by_part = [[] for _ in range(N_PARTS)]
 
     model.eval()
     with torch.no_grad():
         for features, labels, lengths in loader:
             features = features.to(device)
-            logits   = model(features)         # (B, T_max, 6, 3)
-            preds    = logits.argmax(dim=-1)   # (B, T_max, 6)
+            logits   = model(features)              # (B, T_max, 6)
+            probs    = torch.sigmoid(logits)        # (B, T_max, 6)
 
-            mask = labels != -1
-            all_preds.append(preds[mask].cpu().numpy())
-            all_targets.append(labels[mask].cpu().numpy())
-
-    preds_flat   = np.concatenate(all_preds)
-    targets_flat = np.concatenate(all_targets)
-
-    # ---- Overall metrics ----
-    print("\n=== Overall Classification Report ===")
-    report_str = classification_report(targets_flat, preds_flat,
-                                       target_names=CLASS_NAMES)
-    print(report_str)
-
-    macro_f1    = f1_score(targets_flat, preds_flat, average="macro")
-    weighted_f1 = f1_score(targets_flat, preds_flat, average="weighted")
-    accuracy    = float((preds_flat == targets_flat).mean())
+            for p in range(N_PARTS):
+                mask = labels[:, :, p] >= 0        # not padding
+                all_probs_by_part[p].append(
+                    probs[:, :, p][mask].cpu().numpy())
+                all_targets_by_part[p].append(
+                    labels[:, :, p][mask].cpu().numpy())
 
     # ---- Per-body-part metrics ----
-    # Reload raw predictions grouped by part index
-    all_preds_by_part   = [[] for _ in range(N_PARTS)]
-    all_targets_by_part = [[] for _ in range(N_PARTS)]
-
-    with torch.no_grad():
-        for features, labels, lengths in loader:
-            features = features.to(device)
-            logits   = model(features)         # (B, T_max, 6, 3)
-            preds_t  = logits.argmax(dim=-1)   # (B, T_max, 6)
-            for p in range(N_PARTS):
-                mask = labels[:, :, p] != -1
-                all_preds_by_part[p].append(preds_t[:, :, p][mask].cpu().numpy())
-                all_targets_by_part[p].append(labels[:, :, p][mask].cpu().numpy())
-
     part_metrics = {}
-    print("\n=== Per-Body-Part Metrics ===")
+    print("\n=== Per-Body-Part Metrics (model, threshold=0.5) ===")
+    all_probs_flat   = []
+    all_targets_flat = []
+
     for p, part in enumerate(PART_ORDER):
-        p_preds   = np.concatenate(all_preds_by_part[p])
-        p_targets = np.concatenate(all_targets_by_part[p])
-        p_f1      = f1_score(p_targets, p_preds, average="macro")
-        p_cm      = confusion_matrix(p_targets, p_preds, labels=[0, 1, 2]).tolist()
-        p_acc     = float((p_preds == p_targets).mean())
-        part_metrics[part] = {"macro_f1": round(p_f1, 4),
-                              "accuracy": round(p_acc, 4),
-                              "confusion_matrix": p_cm}
-        print(f"  {part:12s}  F1={p_f1:.4f}  Acc={p_acc:.4f}")
+        p_probs   = np.concatenate(all_probs_by_part[p])
+        p_targets = np.concatenate(all_targets_by_part[p]).astype(int)
+        p_preds   = (p_probs >= prob_threshold).astype(int)
+
+        prec, rec, f1, _ = precision_recall_fscore_support(
+            p_targets, p_preds, average="binary", zero_division=0)
+        acc  = float((p_preds == p_targets).mean())
+        try:
+            auc = float(roc_auc_score(p_targets, p_probs))
+        except ValueError:
+            auc = float("nan")
+
+        part_metrics[part] = {
+            "precision": round(float(prec), 4),
+            "recall":    round(float(rec),  4),
+            "f1":        round(float(f1),   4),
+            "accuracy":  round(acc,          4),
+            "auc":       round(auc,          4),
+        }
+        print(f"  {part:12s}  P={prec:.4f}  R={rec:.4f}  F1={f1:.4f}  "
+              f"Acc={acc:.4f}  AUC={auc:.4f}")
+
+        all_probs_flat.append(p_probs)
+        all_targets_flat.append(p_targets)
+
+    # ---- Overall (all parts pooled) ----
+    probs_all   = np.concatenate(all_probs_flat)
+    targets_all = np.concatenate(all_targets_flat)
+    preds_all   = (probs_all >= prob_threshold).astype(int)
+    prec_all, rec_all, f1_all, _ = precision_recall_fscore_support(
+        targets_all, preds_all, average="binary", zero_division=0)
+    acc_all = float((preds_all == targets_all).mean())
+
+    print(f"\n=== Overall (all parts pooled) ===")
+    print(f"  P={prec_all:.4f}  R={rec_all:.4f}  F1={f1_all:.4f}  Acc={acc_all:.4f}")
 
     # ---- Fixed-threshold baseline ----
-    # The labels themselves were generated by the threshold, so baseline = perfect
-    # but we report it to show the model can match or exceed it on noisy real data
-    print("\n=== Threshold Baseline (on test features) ===")
-    # feature col +3 of each part = mean_joint_err → use it for threshold label
-    baseline_preds = []
-    baseline_targets = []
-    for features, labels, lengths in loader:
-        B, T, _ = features.shape
-        for b in range(B):
-            for t in range(T):
-                for p in range(N_PARTS):
-                    lbl = labels[b, t, p].item()
-                    if lbl == -1:
-                        continue
-                    mean_err = features[b, t, p * 4 + 3].item()
-                    if mean_err >= THRESHOLD_MODERATE:
-                        base_lbl = 2
-                    elif mean_err >= THRESHOLD_GOOD:
-                        base_lbl = 1
-                    else:
-                        base_lbl = 0
-                    baseline_preds.append(base_lbl)
-                    baseline_targets.append(lbl)
+    # Re-derive predictions from the mean_joint_err feature column (col +3)
+    base_preds_flat   = []
+    base_targets_flat = []
+    model.eval()
+    with torch.no_grad():
+        for features, labels, lengths in loader:
+            for p in range(N_PARTS):
+                mask = labels[:, :, p] >= 0
+                mean_err = features[:, :, p * 4 + 3]
+                base_preds_flat.append(
+                    (mean_err[mask].numpy() >= THRESHOLD_MODERATE).astype(int))
+                base_targets_flat.append(
+                    labels[:, :, p][mask].numpy().astype(int))
 
-    base_f1  = f1_score(baseline_targets, baseline_preds, average="macro")
-    base_acc = float((np.array(baseline_preds) == np.array(baseline_targets)).mean())
-    print(f"  Threshold baseline — macro F1: {base_f1:.4f}  Acc: {base_acc:.4f}")
+    base_preds   = np.concatenate(base_preds_flat)
+    base_targets = np.concatenate(base_targets_flat)
+    _, _, base_f1, _ = precision_recall_fscore_support(
+        base_targets, base_preds, average="binary", zero_division=0)
+    base_acc = float((base_preds == base_targets).mean())
+    print(f"\n=== Threshold Baseline (error ≥ {THRESHOLD_MODERATE}) ===")
+    print(f"  F1={base_f1:.4f}  Acc={base_acc:.4f}")
 
-    # ---- Save results ----
+    # ---- Save ----
     metrics = {
         "overall": {
-            "accuracy":    round(accuracy,    4),
-            "macro_f1":    round(macro_f1,    4),
-            "weighted_f1": round(weighted_f1, 4),
+            "precision": round(float(prec_all), 4),
+            "recall":    round(float(rec_all),  4),
+            "f1":        round(float(f1_all),   4),
+            "accuracy":  round(acc_all,          4),
         },
         "per_part": part_metrics,
         "baseline": {
-            "macro_f1": round(base_f1, 4),
-            "accuracy": round(base_acc, 4),
+            "f1":       round(float(base_f1),  4),
+            "accuracy": round(base_acc,         4),
         },
         "checkpoint_meta": {k: str(v) for k, v in ckpt_meta.items()},
     }

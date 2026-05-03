@@ -1,6 +1,5 @@
 """
-train.py — Training loop for the BiGRU DeviationClassifier.
-Owner: Member 2
+train.py — Training loop for the LSTM TemporalErrorDetector.
 
 Launch via main.py:
     python main.py train --train-dir data/train/ --val-dir data/val/ \
@@ -21,40 +20,35 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from dataset import DanceDeviationDataset, collate_fn, N_PARTS
-from model import DeviationClassifier, save_checkpoint
-
-
-# Class weights to compensate for imbalanced labels (most frames are "good")
-CLASS_WEIGHTS = torch.tensor([1.0, 2.0, 3.0])  # good / moderate / off
+from model import TemporalErrorDetector, save_checkpoint
 
 
 def compute_f1(
-    preds: torch.Tensor,
+    probs: torch.Tensor,
     targets: torch.Tensor,
-    n_classes: int = 3,
-    ignore_index: int = -1,
+    threshold: float = 0.5,
+    ignore_value: float = -1.0,
 ) -> float:
-    """Macro-averaged F1 across all classes and body parts.
+    """Binary F1 for the "off" class across all parts.
 
     Parameters
     ----------
-    preds   : (N,)  predicted class indices
-    targets : (N,)  ground-truth class indices (-1 entries are ignored)
+    probs   : (N,) predicted probabilities in [0, 1]
+    targets : (N,) binary ground-truth (0.0 / 1.0); -1.0 = padding, ignored
     """
-    mask = targets != ignore_index
-    preds   = preds[mask]
+    mask = targets != ignore_value
+    probs   = probs[mask]
     targets = targets[mask]
 
-    f1_per_class = []
-    for c in range(n_classes):
-        tp = ((preds == c) & (targets == c)).sum().float()
-        fp = ((preds == c) & (targets != c)).sum().float()
-        fn = ((preds != c) & (targets == c)).sum().float()
-        prec = tp / (tp + fp + 1e-8)
-        rec  = tp / (tp + fn + 1e-8)
-        f1_per_class.append((2 * prec * rec / (prec + rec + 1e-8)).item())
+    preds = probs >= threshold
+    tgts  = targets >= threshold
 
-    return sum(f1_per_class) / n_classes
+    tp = (preds & tgts).sum().float()
+    fp = (preds & ~tgts).sum().float()
+    fn = (~preds & tgts).sum().float()
+    prec = tp / (tp + fp + 1e-8)
+    rec  = tp / (tp + fn + 1e-8)
+    return (2 * prec * rec / (prec + rec + 1e-8)).item()
 
 
 def train(
@@ -71,10 +65,10 @@ def train(
     log_path: str = "results/training_log.csv",
     device: str | None = None,
 ) -> None:
-    """Full training loop.
+    """Full training loop for the TemporalErrorDetector.
 
     Saves the checkpoint with the highest validation F1.
-    Logs epoch metrics to a CSV file.
+    Logs per-epoch metrics to a CSV file.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -90,7 +84,7 @@ def train(
     print(f"[train] Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
 
     # Model
-    model = DeviationClassifier(
+    model = TemporalErrorDetector(
         hidden_size=hidden_size,
         num_layers=num_layers,
         dropout=dropout,
@@ -99,8 +93,10 @@ def train(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", patience=5, factor=0.5)
-    weights = CLASS_WEIGHTS.to(device)
-    criterion = nn.CrossEntropyLoss(weight=weights, ignore_index=-1)
+
+    # pos_weight upsamples the "off" class to compensate for class imbalance
+    pos_weight = torch.tensor([3.0] * N_PARTS, device=device)
+    criterion  = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
 
     # Logging
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
@@ -117,16 +113,14 @@ def train(
         model.train()
         total_loss = 0.0
         for features, labels, lengths in train_loader:
-            features = features.to(device)    # (B, T_max, 24)
-            labels   = labels.to(device)      # (B, T_max, 6)
+            features = features.to(device)   # (B, T_max, 24)
+            labels   = labels.to(device)     # (B, T_max, 6)  float 0/1 or -1 padding
 
-            logits = model(features)           # (B, T_max, 6, 3)
-            # Reshape for CrossEntropyLoss: (N, C)
-            B, T, P, C = logits.shape
-            loss = criterion(
-                logits.view(B * T * P, C),
-                labels.view(B * T * P),
-            )
+            logits = model(features)          # (B, T_max, 6)
+            mask   = labels >= 0             # True where not padding
+            raw    = criterion(logits, labels.clamp(min=0))  # (B, T_max, 6)
+            loss   = raw[mask].mean()
+
             optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -138,24 +132,22 @@ def train(
         # ---- Validate ----
         model.eval()
         val_loss = 0.0
-        all_preds, all_targets = [], []
+        all_probs, all_targets = [], []
         with torch.no_grad():
             for features, labels, lengths in val_loader:
                 features = features.to(device)
                 labels   = labels.to(device)
                 logits   = model(features)
-                B, T, P, C = logits.shape
-                loss = criterion(logits.view(B * T * P, C), labels.view(B * T * P))
-                val_loss += loss.item()
-                preds = logits.argmax(dim=-1)          # (B, T, 6)
-                all_preds.append(preds.view(-1).cpu())
+                mask     = labels >= 0
+                raw      = criterion(logits, labels.clamp(min=0))
+                val_loss += raw[mask].mean().item()
+
+                probs = torch.sigmoid(logits)
+                all_probs.append(probs.view(-1).cpu())
                 all_targets.append(labels.view(-1).cpu())
 
         avg_val_loss = val_loss / len(val_loader)
-        val_f1 = compute_f1(
-            torch.cat(all_preds),
-            torch.cat(all_targets),
-        )
+        val_f1 = compute_f1(torch.cat(all_probs), torch.cat(all_targets))
         scheduler.step(val_f1)
 
         elapsed = time.time() - t0
@@ -178,7 +170,7 @@ def train(
                 val_f1=val_f1,
                 val_loss=avg_val_loss,
             )
-            print(f"  ✓ New best checkpoint saved (val_f1={val_f1:.4f})")
+            print(f"  New best checkpoint saved (val_f1={val_f1:.4f})")
 
     log_file.close()
     print(f"\n[train] Done. Best val F1: {best_val_f1:.4f}")

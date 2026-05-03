@@ -9,7 +9,7 @@
 # Usage:
 #   sbatch slurm_run.sh extract_all          # Step 1: extract keypoints for all videos
 #   sbatch slurm_run.sh build_dataset        # Step 2: build train/val/test .npz files
-#   sbatch slurm_run.sh train                # Step 3: train the BiGRU classifier
+#   sbatch slurm_run.sh train                # Step 3: train the LSTM TemporalErrorDetector
 #   sbatch slurm_run.sh test                 # Step 4: evaluate on the test split
 #   sbatch slurm_run.sh analyze   phrase_01  # Inference: analyze one phrase pair
 #   sbatch slurm_run.sh batch                # Inference: analyze all phrase pairs
@@ -89,12 +89,11 @@ case "$TASK" in
       --splits       data/splits.json \
       --out-train    data/train/ \
       --out-val      data/val/ \
-      --out-test     data/test/ \
-      --fps          15
+      --out-test     data/test/
     ;;
 
   train)
-    echo ">>> Training BiGRU DeviationClassifier"
+    echo ">>> Training LSTM TemporalErrorDetector"
     python main.py train \
       --train-dir    data/train/ \
       --val-dir      data/val/ \

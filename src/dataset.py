@@ -1,5 +1,5 @@
 """
-dataset.py — Difference feature builder and PyTorch Dataset for the BiGRU classifier.
+dataset.py — Difference feature builder and PyTorch Dataset for the LSTM Temporal Error Detector.
 Owner: Member 2
 
 Feature vector per aligned frame: shape (24,)
@@ -7,10 +7,10 @@ Feature vector per aligned frame: shape (24,)
     [mean_x_err, mean_y_err, max_joint_err, mean_joint_err]  →  4 features
   6 parts × 4 features = 24 dimensions
 
-Label per frame per body part: int in {0, 1, 2}
-  0 = good      (error < THRESHOLD_GOOD)
-  1 = moderate  (THRESHOLD_GOOD ≤ error < THRESHOLD_MODERATE)
-  2 = off       (error ≥ THRESHOLD_MODERATE)
+Label per frame per body part: float in {0.0, 1.0}
+  0.0 = correct  (mean error < THRESHOLD_MODERATE)
+  1.0 = off      (mean error ≥ THRESHOLD_MODERATE)
+  Used with BCEWithLogitsLoss; padding positions filled with -1.0 and masked.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scoring import BODY_PARTS, THRESHOLD_GOOD, THRESHOLD_MODERATE
+from scoring import BODY_PARTS, THRESHOLD_MODERATE
 
 # Ordered list so features are always in the same column order
 PART_ORDER = ["LEFT_ARM", "RIGHT_ARM", "LEFT_LEG", "RIGHT_LEG", "TORSO", "HEAD"]
@@ -62,23 +62,24 @@ def build_labels(
     bench_aligned: np.ndarray,
     user_aligned: np.ndarray,
 ) -> np.ndarray:
-    """Generate per-frame per-part class labels using geometric thresholds.
+    """Generate per-frame per-part binary labels using a geometric threshold.
+
+    A frame is labelled "off" (1.0) when the mean joint error for that body
+    part is ≥ THRESHOLD_MODERATE (0.35 torso lengths).  This gives weak
+    supervision: noisy but abundant labels derived from AIST++ pairs.
 
     Returns
     -------
-    np.ndarray, shape (T', 6)  — dtype int64; values in {0, 1, 2}
+    np.ndarray, shape (T', 6)  — dtype float32; values in {0.0, 1.0}
     """
     diff_xy = bench_aligned[:, :, :2] - user_aligned[:, :, :2]
     joint_errors = np.linalg.norm(diff_xy, axis=2)  # (T', 17)
 
-    labels = np.zeros((len(bench_aligned), N_PARTS), dtype=np.int64)
+    labels = np.zeros((len(bench_aligned), N_PARTS), dtype=np.float32)
     for p_idx, part in enumerate(PART_ORDER):
         joints = BODY_PARTS[part]
         mean_err = joint_errors[:, joints].mean(axis=1)  # (T',)
-        labels[:, p_idx] = np.where(
-            mean_err >= THRESHOLD_MODERATE, 2,
-            np.where(mean_err >= THRESHOLD_GOOD, 1, 0)
-        )
+        labels[:, p_idx] = (mean_err >= THRESHOLD_MODERATE).astype(np.float32)
     return labels
 
 
@@ -121,7 +122,7 @@ class DanceDeviationDataset:
         features, labels = load_sample(self.files[idx])
         return (
             torch.from_numpy(features).float(),   # (T', 24)
-            torch.from_numpy(labels).long(),       # (T', 6)
+            torch.from_numpy(labels).float(),     # (T', 6)  binary 0/1 for BCELoss
         )
 
 
@@ -140,5 +141,5 @@ def collate_fn(batch):
     feat_list, lbl_list = zip(*batch)
     lengths  = torch.tensor([f.shape[0] for f in feat_list])
     features = pad_sequence(feat_list, batch_first=True)
-    labels   = pad_sequence(lbl_list,  batch_first=True, padding_value=-1)
+    labels   = pad_sequence(lbl_list,  batch_first=True, padding_value=-1.0)
     return features, labels, lengths

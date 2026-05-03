@@ -141,16 +141,35 @@ def task_analyze(args: argparse.Namespace) -> None:
     print(f"  aligned length T' = {len(path)}")
 
     print("[analyze] Building diff features...")
-    from dataset import build_diff_features
+    from dataset import build_diff_features, PART_ORDER
     diff_feats = build_diff_features(bench_al, user_al)  # (T', 24)
 
-    # Compute joint errors and part errors (used for score, intervals, and video)
+    # Joint errors are always computed (needed for score and video skeleton color)
     joint_errors = compute_joint_errors(bench_al, user_al)
     part_errors  = per_part_error_over_time(joint_errors)
-    intervals    = find_off_moments(
-        part_errors, threshold=args.threshold,
-        fps=args.fps, min_duration_s=args.min_duration, timestamps=timestamps,
-    )
+
+    # Interval detection: use trained LSTM if checkpoint provided, else fall back
+    # to the fixed geometric threshold.
+    if args.checkpoint and Path(args.checkpoint).exists():
+        import torch
+        from model import load_checkpoint
+        model, _ = load_checkpoint(args.checkpoint)
+        x = torch.from_numpy(diff_feats).float().unsqueeze(0)   # (1, T', 24)
+        probs = model.predict_proba(x).squeeze(0).numpy()        # (T', 6)
+        part_signals = {part: probs[:, p_idx]
+                        for p_idx, part in enumerate(PART_ORDER)}
+        intervals = find_off_moments(
+            part_signals, threshold=0.5,
+            fps=args.fps, min_duration_s=args.min_duration, timestamps=timestamps,
+        )
+        print(f"[analyze] Using LSTM Temporal Error Detector ({args.checkpoint})")
+    else:
+        intervals = find_off_moments(
+            part_errors, threshold=args.threshold,
+            fps=args.fps, min_duration_s=args.min_duration, timestamps=timestamps,
+        )
+        print("[analyze] No checkpoint — using fixed threshold")
+
     score    = overall_score(part_errors)
     feedback = generate_feedback(intervals)
 

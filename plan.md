@@ -5,7 +5,7 @@
 Given a 10–15 second benchmark dance video and a learner's video of the same phrase, the system:
 1. Extracts body keypoints from both videos (MediaPipe)
 2. Normalizes and aligns the two motion sequences (DTW)
-3. **Runs a trained BiGRU classifier** to predict, for each aligned frame and each body part, whether the learner's pose is good / moderate / off
+3. **Runs a trained LSTM Temporal Error Detector** to output, per aligned frame and per body part, the probability that the learner is "off"
 4. Outputs a timestamped report telling the learner exactly **when** and **which body parts** deviate from the benchmark
 
 No data collection is required. Training and testing use open-source dance datasets (AIST++, Human3.6M).
@@ -38,9 +38,16 @@ No data collection is required. Training and testing use open-source dance datas
 
 ### Problem Framing
 
-The original pipeline uses a fixed numeric threshold to flag "off" frames. This is fragile — the right threshold depends on the dance style, body part, and speed. We replace the threshold with a **learned classifier** trained on AIST++ data.
+The rule-based pipeline flags a body part as "off" whenever its per-frame error
+exceeds a fixed threshold (0.25) for at least 0.5 s.  This is fragile:
 
-### Approach: Bidirectional GRU Frame Classifier
+- A single threshold cannot adapt to dance style, speed, or body-part dynamics
+- It fires on every transient fluctuation (e.g. phrase_05 scored 0.0 with 36 spurious intervals)
+- It has no sense of *temporal pattern* — it treats each frame independently
+
+We replace it with a **learned LSTM Temporal Error Detector**.
+
+### Approach: LSTM Temporal Error Detector
 
 ```
 Input at each aligned frame t:
@@ -49,41 +56,40 @@ Input at each aligned frame t:
                         features per part: mean_x_err, mean_y_err,
                                            max_joint_err, mean_joint_err
 
-Model:
-  BiGRU(hidden=64, layers=2, dropout=0.3)
+Model (src/model.py — TemporalErrorDetector):
+  LSTM(input=24, hidden=64, layers=2, unidirectional, dropout=0.3)
     → takes sequence of 24-dim difference vectors  shape (T', 24)
-    → outputs per-frame hidden states              shape (T', 128)
-  Linear(128 → 6 × 3)   →  logits for 6 parts × 3 classes (good / moderate / off)
+    → outputs per-frame hidden states              shape (T', 64)
+  Linear(64 → 6)  →  logits for 6 body parts
+  sigmoid(logits) →  P(off) ∈ [0, 1] per frame per body part
 
-Output per frame per body part:
-  class 0 — good      (error < 0.15 torso lengths)
-  class 1 — moderate  (0.15 – 0.35)
-  class 2 — off       (> 0.35)
+Interval detection:
+  Replace:  error > 0.25  for ≥ 0.5 s
+  With:     P(off) > 0.5  for ≥ 0.5 s
 ```
 
-### Why BiGRU?
-- Captures **temporal context**: whether a pose error is a brief fluctuation or a sustained deviation
-- Bidirectional: can see both what came before and after each frame — helps distinguish a transition pose (expected deviation) from a genuine mistake
-- Lightweight: trains in minutes on CPU; runs in real time on a laptop
+### Why LSTM?
+- Captures **temporal patterns**: sustained drift looks different from a single-frame spike — the LSTM learns the difference
+- Suppresses noise: a 2-frame blip will not produce high probability across a 0.5 s window
+- Binary output: simpler and more interpretable than 3-class — the model answers "is this frame off?" directly
+- Lightweight: ~65 K parameters; trains in minutes on CPU, runs in real time
 
-### Label Generation (No Manual Annotation Needed)
+### Label Generation (Weak Supervision)
 
 AIST++ provides the same choreography performed by multiple subjects. We:
 1. Pick one subject as the "benchmark" and another as the "learner" for each choreography
 2. Compute normalized DTW-aligned difference vectors
-3. Apply the **geometric threshold** (0.15 / 0.35) to auto-generate 3-class labels
-4. This gives thousands of labeled (feature, label) pairs from existing open-source data
-
-This is called **weak supervision** — labels are noisy but the volume makes up for it.
+3. Label a frame as **off (1)** if mean joint error ≥ 0.35 torso lengths, else **correct (0)**
+4. Train with `BCEWithLogitsLoss`, upweighting the "off" class (pos_weight=3) for class imbalance
 
 ### Train / Validation / Test Split
 
 | Split | Source | Size | Purpose |
 |-------|--------|------|---------|
-| Train | AIST++ — 20 choreographies, subjects 1–20 | ~70% of pairs | Learn classifier weights |
-| Validation | AIST++ — same choreographies, subjects 21–25 | ~15% | Tune learning rate, dropout, threshold |
-| Test | AIST++ — 5 held-out choreographies (never seen during training) | ~15% | Final reported accuracy and F1 |
-| Demo | YouTube MV + team-recorded clips | 3–5 clips | Qualitative demo in Streamlit |
+| Train | AIST++ — 20 choreographies, subjects 1–20 | ~70% of pairs | Learn LSTM weights |
+| Validation | AIST++ — same choreographies, subjects 21–25 | ~15% | Tune lr, dropout, threshold |
+| Test | AIST++ — 5 held-out choreographies (never seen during training) | ~15% | Final F1 and precision/recall |
+| Demo | YouTube MV + AIST++ clips | 3–5 clips | Qualitative demo in Streamlit |
 
 ---
 
@@ -95,10 +101,10 @@ This is called **weak supervision** — labels are noisy but the volume makes up
 - [x] `src/pose_extraction.py` — `PoseEstimator` (MediaPipe), Savitzky-Golay smoothing, confidence interpolation
 - [x] `src/normalization.py` — center on hip midpoint, scale by torso length
 - [x] `src/alignment.py` — DTW alignment via `fastdtw`, `warping_path_to_timestamps`
-- [x] `src/dataset.py` — `build_diff_features` (24-dim), `build_labels`, `DanceDeviationDataset`, `collate_fn`
-- [x] `src/model.py` — BiGRU `DeviationClassifier` (input 24 → hidden 64×2 → output 6×3)
-- [x] `src/train.py` — training loop, class-weighted CE loss, Adam optimizer, CSV logging, best-checkpoint saving
-- [x] `src/test.py` — evaluation loop, per-class & per-part F1, confusion matrices, threshold baseline
+- [x] `src/dataset.py` — `build_diff_features` (24-dim), `build_labels` (binary), `DanceDeviationDataset`, `collate_fn`
+- [x] `src/model.py` — LSTM `TemporalErrorDetector` (input 24 → hidden 64 → output 6 probabilities)
+- [x] `src/train.py` — training loop, BCEWithLogitsLoss (pos_weight=3), Adam optimizer, CSV logging, best-checkpoint saving
+- [x] `src/test.py` — evaluation loop, per-part binary precision / recall / F1 / AUC, threshold baseline
 - [x] `src/scoring.py` — `compute_joint_errors`, `per_part_error_over_time`, `find_off_moments`, `overall_score`
 - [x] `src/visualization.py` — skeleton overlay, side-by-side comparison video, Plotly error timeline & bar chart
 - [x] `src/feedback.py` — plain-English interval descriptions, Markdown report formatter
@@ -121,12 +127,7 @@ This is called **weak supervision** — labels are noisy but the volume makes up
 - [ ] Launch training on Oscar: `sbatch slurm_run.sh train`
 - [ ] Monitor validation loss; adjust dropout / learning rate if overfitting
 - [ ] Run `python main.py test` on the held-out test split; save `results/test_metrics.json`
-- [ ] Report: per-class accuracy, macro F1, weighted F1, confusion matrix per body part
-- [ ] Run ablation experiments:
-  - Unidirectional GRU vs. BiGRU
-  - No DTW (naive frame-by-frame pairing) vs. DTW
-  - No normalization vs. normalized
-  - Frame-level MLP (no temporal context) vs. BiGRU
+- [ ] Report: per-part binary precision, recall, F1, AUC vs. fixed-threshold baseline
 
 ### Evaluation & Analysis
 - [ ] Per-body-part error analysis — which body parts are hardest for the model?
@@ -153,9 +154,8 @@ This is called **weak supervision** — labels are noisy but the volume makes up
 | Pose extraction module | M1 | End of Week 1 |
 | `dataset.py` + labeled `.npz` training data | M2 + M3 | End of Week 1 |
 | Train/val/test split index (`splits.json`) | M3 | End of Week 1 |
-| Trained BiGRU checkpoint | M2 | End of Week 2 |
-| Test-set evaluation metrics + confusion matrices | M3 | End of Week 2 |
-| Ablation table | M3 | End of Week 2 |
+| Trained LSTM checkpoint | M2 | End of Week 2 |
+| Test-set evaluation metrics (precision / recall / F1 / AUC per part) | M3 | End of Week 2 |
 | End-to-end Streamlit demo (with trained model) | M4 | End of Week 2 |
 | Qualitative demo evaluation | M1 | End of Week 3 |
 | Final report | All | End of Week 3 |
@@ -180,14 +180,14 @@ learner.mp4   ──┘                                                         
                                                                                │
                                                                                ▼
                                                           ┌────────────────────────────────┐
-                                                          │  6. BiGRU Deviation Classifier │  ← trained model
-                                                          │  input:  (T', 24)              │
-                                                          │  output: (T', 6, 3) labels     │
-                                                          └───────────────┬────────────────┘
+                                                          │  6. LSTM Temporal Error Detector│  ← trained model
+                                                          │  input:  (T', 24)               │
+                                                          │  output: (T', 6) P(off) per part│
+                                                          └───────────────┬─────────────────┘
                                                                           │
                                                                           ▼
                                                               [7. Interval Extraction]
-                                                         contiguous "off" frames → Interval list
+                                                         P(off) > 0.5 for ≥ 0.5 s → Interval list
                                                                     ↙            ↘
                                                      [8a. Comparison video]  [8b. Timeline chart]
                                                                     ↘            ↙
@@ -207,7 +207,9 @@ AIST++ keypoints (.npy)
 [build_diff_features()]  →  (T', 24) per pair
         │
         ▼
-[geometric threshold]    →  (T', 6) class labels   ← weak supervision
+[build_labels()]         →  (T', 6) binary labels   ← weak supervision
+                              1 = off  (mean_err ≥ 0.35 torso lengths)
+                              0 = correct
         │
         ▼
 [save .npz per pair]     →  data/train/ data/val/ data/test/
@@ -216,8 +218,8 @@ AIST++ keypoints (.npy)
 [PyTorch DataLoader]
         │
         ▼
-[BiGRU DeviationClassifier]
-   CrossEntropyLoss (weighted for class imbalance)
+[LSTM TemporalErrorDetector]
+   BCEWithLogitsLoss (pos_weight=3 for class imbalance)
    Adam optimizer, lr=1e-3
    30 epochs, best checkpoint by val F1
         │
@@ -270,32 +272,30 @@ AIST++ keypoints (.npy)
                                   │ (T', 24) diff feature sequence
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  LAYER 6 — BiGRU DEVIATION CLASSIFIER   src/model.py  (M2)                 │
+│  LAYER 6 — LSTM TEMPORAL ERROR DETECTOR   src/model.py                      │
 │                                                                              │
-│  class DeviationClassifier(nn.Module):                                       │
-│    self.gru  = nn.GRU(input_size=24, hidden_size=64,                         │
-│                       num_layers=2, batch_first=True,                        │
-│                       bidirectional=True, dropout=0.3)                       │
-│    self.head = nn.Linear(128, 6 * 3)                                         │
+│  class TemporalErrorDetector(nn.Module):                                     │
+│    self.lstm = nn.LSTM(input_size=24, hidden_size=64,                        │
+│                        num_layers=2, batch_first=True, dropout=0.3)          │
+│    self.head = nn.Linear(64, 6)                                              │
 │                                                                              │
 │    forward(x: Tensor (B, T', 24))                                            │
-│      h, _ = self.gru(x)          → (B, T', 128)                             │
-│      logits = self.head(h)        → (B, T', 18)                             │
-│      return logits.view(B, T', 6, 3)   # 6 parts × 3 classes                │
+│      h, _ = self.lstm(x)         → (B, T', 64)                              │
+│      logits = self.head(h)        → (B, T', 6)                              │
 │                                                                              │
-│  Output per frame per body part:                                             │
-│    class 0 = good      (error < 0.15 torso lengths)                          │
-│    class 1 = moderate  (0.15 – 0.35)                                         │
-│    class 2 = off       (> 0.35)                                              │
+│    predict_proba(x)                                                          │
+│      return sigmoid(logits)       → (B, T', 6)  P(off) ∈ [0, 1]            │
+│                                                                              │
+│  Output: per frame per body part — probability the frame is "off"            │
 └─────────────────────────────────┬────────────────────────────────────────────┘
-                                  │ (T', 6) predicted class per frame per part
+                                  │ (T', 6) P(off) per frame per part
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  LAYER 7 — INTERVAL EXTRACTION      src/scoring.py  (M2)                    │
-│  labels_to_intervals(pred_labels, fps, min_duration_s=0.5)                   │
-│    → List[Interval(start_s, end_s, part, severity)]                          │
-│    contiguous "class 2" (off) runs per body part → one Interval each         │
-│    minimum run length = 0.5 s to suppress single-frame noise                 │
+│  LAYER 7 — INTERVAL EXTRACTION      src/scoring.py                           │
+│  find_off_moments(part_signals, threshold=0.5, fps, min_duration_s=0.5)      │
+│    → List[Interval(start_s, end_s, part, mean_error)]                        │
+│    contiguous runs where P(off) > 0.5 per body part → one Interval each     │
+│    minimum run length = 0.5 s to suppress transient spikes                   │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   │ List[Interval]
                                   ▼
@@ -336,7 +336,7 @@ BODY_PARTS: dict[str, list[int]] = {
 # 6 parts × 4 features: [mean_x_err, mean_y_err, max_joint_err, mean_joint_err]
 DiffFeatures = np.ndarray
 
-# Label tensor per frame: shape (T', 6)  — 0=good, 1=moderate, 2=off
+# Label tensor per frame: shape (T', 6)  — binary float32: 0.0=correct, 1.0=off
 Labels = np.ndarray
 
 @dataclass
