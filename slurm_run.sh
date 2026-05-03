@@ -7,10 +7,11 @@
 # SLURM job script for Oscar
 #
 # Usage:
-#   sbatch slurm_run.sh extract_all          # Step 1: extract keypoints for all videos
-#   sbatch slurm_run.sh build_dataset        # Step 2: build train/val/test .npz files
-#   sbatch slurm_run.sh train                # Step 3: train the LSTM TemporalErrorDetector
-#   sbatch slurm_run.sh test                 # Step 4: evaluate on the test split
+#   sbatch slurm_run.sh download             # Step 1: download videos from CSV → data/videos/
+#   sbatch slurm_run.sh extract_all          # Step 2: extract keypoints  → data/keypoints/
+#   sbatch slurm_run.sh build_dataset        # Step 3: build train/val/test .npz pairs
+#   sbatch slurm_run.sh train                # Step 4: train the LSTM TemporalErrorDetector
+#   sbatch slurm_run.sh test                 # Step 5: evaluate on the test split
 #   sbatch slurm_run.sh analyze   phrase_01  # Inference: analyze one phrase pair
 #   sbatch slurm_run.sh batch                # Inference: analyze all phrase pairs
 #
@@ -61,10 +62,15 @@ source .venv/bin/activate
 # ---- Dispatch ----
 case "$TASK" in
 
+  download)
+    echo ">>> Downloading videos from scripts/filtered_gBR_sBM_c01.csv → data/videos/"
+    bash scripts/download_data.sh scripts/filtered_gBR_sBM_c01.csv
+    ;;
+
   extract_all)
-    echo ">>> Extracting keypoints for all videos in data/"
+    echo ">>> Extracting keypoints from data/videos/ → data/keypoints/"
     python main.py extract_all \
-      --data    data/ \
+      --data    data/videos/ \
       --fps     15 \
       --backend mediapipe
     ;;
@@ -83,10 +89,9 @@ case "$TASK" in
     ;;
 
   build_dataset)
-    echo ">>> Building train/val/test .npz dataset from AIST++ keypoints"
+    echo ">>> Building train/val/test .npz pairs from data/keypoints/"
     python scripts/build_dataset.py \
-      --aist-dir     data/aist_keypoints/ \
-      --splits       data/splits.json \
+      --kp-dir       data/keypoints/ \
       --out-train    data/train/ \
       --out-val      data/val/ \
       --out-test     data/test/
@@ -127,7 +132,7 @@ case "$TASK" in
 
   *)
     echo "ERROR: Unknown task '$TASK'"
-    echo "Valid tasks: extract_all | build_dataset | train | test | analyze | batch"
+    echo "Valid tasks: download | extract_all | build_dataset | train | test | analyze | batch"
     exit 1
     ;;
 

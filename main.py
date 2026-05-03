@@ -6,15 +6,19 @@ Used by the SLURM job script (slurm_run.sh) on Oscar.
 Tasks
 -----
 extract      Extract and save keypoints for a single video.
-extract_all  Extract keypoints for every video in data/.
-train        Train the BiGRU DeviationClassifier on data/train/.
+extract_all  Extract keypoints for every video in a directory.
+             Flat mode  (data/videos/*.mp4)  → data/keypoints/{stem}.npy
+             Phrase mode (data/phrase_XX/*.mp4) → data/phrase_XX/keypoints/{role}_kp.npy
+train        Train the LSTM TemporalErrorDetector on data/train/.
 test         Evaluate the trained model on data/test/.
 analyze      Run the full inference pipeline on one benchmark/learner pair.
 batch        Run analyze on every phrase_XX/ folder found in data/.
 
 Examples
 --------
-  python main.py extract --video data/phrase_01/benchmark.mp4 --out data/phrase_01/keypoints/benchmark_kp.npy
+  python main.py extract --video data/videos/gBR_sBM_c01_d04_mBR0_ch01.mp4 \
+                         --out data/keypoints/gBR_sBM_c01_d04_mBR0_ch01.npy
+  python main.py extract_all --data data/videos/
   python main.py train   --train-dir data/train/ --val-dir data/val/ \
                          --checkpoint checkpoints/best_model.pt --epochs 30
   python main.py test    --test-dir data/test/ --checkpoint checkpoints/best_model.pt \
@@ -78,15 +82,11 @@ def task_extract(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task: analyze
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Task: train
 # ---------------------------------------------------------------------------
 
 def task_train(args: argparse.Namespace) -> None:
-    """Train the BiGRU DeviationClassifier."""
+    """Train the LSTM TemporalErrorDetector."""
     from train import train
     train(
         train_dir       = args.train_dir,
@@ -283,29 +283,50 @@ def task_batch(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def task_extract_all(args: argparse.Namespace) -> None:
-    """Extract keypoints for every benchmark.mp4 and learner.mp4 in data/."""
-    data_dir = Path(args.data)
-    phrase_dirs = sorted(p for p in data_dir.iterdir() if p.is_dir())
+    """Extract keypoints for every .mp4 in a directory.
 
+    Flat mode  — data/videos/*.mp4        → data/keypoints/{stem}.npy
+    Phrase mode — data/phrase_XX/*.mp4    → data/phrase_XX/keypoints/{role}_kp.npy
+    """
+    data_dir = Path(args.data)
+
+    # Flat mode: directory contains .mp4 files directly
+    flat_videos = sorted(data_dir.glob("*.mp4"))
+    if flat_videos:
+        kp_dir = data_dir.parent / "keypoints"
+        kp_dir.mkdir(parents=True, exist_ok=True)
+        for vid in flat_videos:
+            out = kp_dir / f"{vid.stem}.npy"
+            if out.exists():
+                print(f"[extract_all] Already done, skipping: {vid.name}")
+                continue
+            print(f"\n[extract_all] {vid.name}")
+            task_extract(argparse.Namespace(
+                video=str(vid), out=str(out),
+                fps=args.fps, backend=args.backend,
+            ))
+        print("\n[extract_all] All extractions complete.")
+        return
+
+    # Phrase mode: directory contains phrase_XX/ subdirectories
+    phrase_dirs = sorted(p for p in data_dir.iterdir() if p.is_dir())
     if not phrase_dirs:
-        print(f"[extract_all] No subdirectories found in {data_dir}")
+        print(f"[extract_all] No videos or subdirectories found in {data_dir}")
         return
 
     for phrase_dir in phrase_dirs:
         for role in ("benchmark", "learner"):
             vid = phrase_dir / f"{role}.mp4"
             if not vid.exists():
-                print(f"[extract_all] {vid} not found, skipping.")
                 continue
             out = phrase_dir / "keypoints" / f"{role}_kp.npy"
-            sub_args = argparse.Namespace(
-                video   = str(vid),
-                out     = str(out),
-                fps     = args.fps,
-                backend = args.backend,
-            )
+            if out.exists():
+                continue
             print(f"\n[extract_all] {phrase_dir.name}/{role}.mp4")
-            task_extract(sub_args)
+            task_extract(argparse.Namespace(
+                video=str(vid), out=str(out),
+                fps=args.fps, backend=args.backend,
+            ))
 
     print("\n[extract_all] All extractions complete.")
 
@@ -350,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_an.add_argument("--out",           default="results/", help="Output directory")
 
     # --- train ---
-    p_tr = sub.add_parser("train", help="Train the BiGRU DeviationClassifier")
+    p_tr = sub.add_parser("train", help="Train the LSTM TemporalErrorDetector")
     p_tr.add_argument("--train-dir",  required=True, dest="train_dir")
     p_tr.add_argument("--val-dir",    required=True, dest="val_dir")
     p_tr.add_argument("--checkpoint", default="checkpoints/best_model.pt")

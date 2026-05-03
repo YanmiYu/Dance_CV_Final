@@ -1,144 +1,158 @@
 """
-scripts/build_dataset.py — Build train/val/test .npz files from AIST++ keypoints.
-Owner: Member 3
+scripts/build_dataset.py — Build train/val/test .npz pairs from extracted keypoints.
 
-AIST++ pre-extracted 2D keypoints can be downloaded from:
-  https://aistdancedb.ongaaccel.jp/database_split/
+Reads .npy keypoint files produced by `main.py extract_all` on the videos in
+`data/videos/`.  Filenames follow the AIST Dance DB convention:
 
-The keypoints are stored per-sequence as .pkl files with shape (T, 17, 2) or (T, 17, 3).
-This script:
-  1. Reads splits.json to determine which choreography IDs go in train/val/test
-  2. For each choreography, pairs sequences (one as benchmark, one as learner)
-  3. Normalizes + DTW-aligns each pair
-  4. Builds diff features + labels and saves as .npz
+    gBR_sBM_c01_d04_mBR0_ch01.npy
+                    ^^^  ^^^^  ^^^^
+                    dancer music choreo
 
-Usage:
+Pairing rule
+------------
+Dancer d04 is always the benchmark.
+Dancers d05 and d06 are learners.
+A pair is valid when benchmark and learner share the same music and choreo codes.
+
+  d04 vs d05 — music codes: mBR0, mBR1
+  d04 vs d06 — music codes: mBR2, mBR3
+
+Train / val / test split  (by choreography number)
+---------------------------------------------------
+  ch01–ch07  →  train
+  ch08–ch09  →  val
+  ch10       →  test
+
+Usage
+-----
     python scripts/build_dataset.py \
-        --aist-dir  data/aist_keypoints/ \
-        --splits    data/splits.json \
+        --kp-dir    data/keypoints/ \
         --out-train data/train/ \
         --out-val   data/val/ \
         --out-test  data/test/
-
-splits.json format:
-    {
-      "train": ["gBR_sBM_cAll_d04", "gHO_sBM_cAll_d06", ...],
-      "val":   ["gJB_sBM_cAll_d02", ...],
-      "test":  ["gKR_sBM_cAll_d01", ...]
-    }
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import pickle
+import re
+import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from normalization import normalize
 from alignment import dtw_align
 from dataset import build_diff_features, build_labels, save_sample
 
+BENCHMARK_DANCER = "d04"
+LEARNER_DANCERS  = {"d05", "d06"}
 
-def load_aist_keypoints(path: Path) -> np.ndarray:
-    """Load AIST++ keypoints from a .pkl file.
+# Choreography number → split name
+def choreo_split(choreo: str) -> str:
+    n = int(choreo[2:])   # "ch07" → 7
+    if n <= 7:
+        return "train"
+    if n <= 9:
+        return "val"
+    return "test"
 
-    Expected shape: (T, 17, 2) or (T, 17, 3).
-    If shape is (T, 17, 2), a confidence column of 1.0 is appended.
+
+def parse_stem(stem: str) -> dict | None:
+    """Parse 'gBR_sBM_c01_d04_mBR0_ch01' into its components.
+
+    Returns None if the filename doesn't match the expected pattern.
     """
-    with open(path, "rb") as f:
-        data = pickle.load(f)
-
-    # AIST++ may store keypoints under different keys; try common ones
-    if isinstance(data, dict):
-        kp = data.get("keypoints2d", data.get("kps2d", data.get("joints2d")))
-        if kp is None:
-            raise ValueError(f"No recognized keypoint key in dict from {path}. "
-                             f"Keys found: {list(data.keys())}")
-    else:
-        kp = data
-
-    kp = np.array(kp, dtype=np.float32)
-    if kp.ndim == 3 and kp.shape[-1] == 2:
-        conf = np.ones((*kp.shape[:2], 1), dtype=np.float32)
-        kp = np.concatenate([kp, conf], axis=-1)
-    return kp   # (T, 17, 3)
+    m = re.match(r"^(.+)_(d\d+)_(m\w+)_(ch\d+)$", stem)
+    if not m:
+        return None
+    return {
+        "prefix": m.group(1),   # gBR_sBM_c01
+        "dancer": m.group(2),   # d04
+        "music":  m.group(3),   # mBR0
+        "choreo": m.group(4),   # ch01
+    }
 
 
-def process_pair(
-    bench_kp: np.ndarray,
-    learner_kp: np.ndarray,
-    out_path: Path,
-) -> bool:
-    """Normalize, align, extract features/labels, save .npz. Returns True on success."""
+def process_pair(bench_kp: np.ndarray, learner_kp: np.ndarray, out_path: Path) -> bool:
+    """Normalize, align, build features/labels, save .npz. Returns True on success."""
     try:
-        bench_norm  = normalize(bench_kp)
-        learner_norm = normalize(learner_kp)
-        bench_al, learner_al, _ = dtw_align(bench_norm, learner_norm)
-        features = build_diff_features(bench_al, learner_al)
-        labels   = build_labels(bench_al, learner_al)
-        save_sample(features, labels, out_path)
+        bench_al, learner_al, _ = dtw_align(normalize(bench_kp), normalize(learner_kp))
+        save_sample(build_diff_features(bench_al, learner_al),
+                    build_labels(bench_al, learner_al),
+                    out_path)
         return True
     except Exception as exc:
-        print(f"  [WARN] Failed: {exc}")
+        print(f"  [WARN] {exc}")
         return False
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build AIST++ train/val/test dataset")
-    parser.add_argument("--aist-dir",  required=True, help="Dir with AIST++ .pkl files")
-    parser.add_argument("--splits",    required=True, help="Path to splits.json")
-    parser.add_argument("--out-train", required=True)
-    parser.add_argument("--out-val",   required=True)
-    parser.add_argument("--out-test",  required=True)
-    parser.add_argument("--fps",       type=float, default=15.0)
+    parser = argparse.ArgumentParser(description="Build AIST train/val/test .npz dataset")
+    parser.add_argument("--kp-dir",    required=True, dest="kp_dir",
+                        help="Directory of .npy keypoint files (data/keypoints/)")
+    parser.add_argument("--out-train", required=True, dest="out_train")
+    parser.add_argument("--out-val",   required=True, dest="out_val")
+    parser.add_argument("--out-test",  required=True, dest="out_test")
     args = parser.parse_args()
 
-    aist_dir = Path(args.aist_dir)
-    splits   = json.loads(Path(args.splits).read_text())
-    out_dirs = {"train": Path(args.out_train),
-                "val":   Path(args.out_val),
-                "test":  Path(args.out_test)}
+    kp_dir  = Path(args.kp_dir)
+    out_dirs = {
+        "train": Path(args.out_train),
+        "val":   Path(args.out_val),
+        "test":  Path(args.out_test),
+    }
+    for d in out_dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
 
-    for split_name, choreo_ids in splits.items():
-        out_dir = out_dirs[split_name]
-        out_dir.mkdir(parents=True, exist_ok=True)
-        n_ok = n_fail = 0
+    # Index all .npy files by (prefix, music, choreo) → {dancer: path}
+    index: dict[tuple, dict[str, Path]] = defaultdict(dict)
+    for npy in sorted(kp_dir.glob("*.npy")):
+        info = parse_stem(npy.stem)
+        if info is None:
+            print(f"[build] Skipping unrecognised filename: {npy.name}")
+            continue
+        key = (info["prefix"], info["music"], info["choreo"])
+        index[key][info["dancer"]] = npy
 
-        for choreo_id in choreo_ids:
-            # Find all sequences with this choreography ID prefix
-            seq_files = sorted(aist_dir.glob(f"{choreo_id}*.pkl"))
-            if len(seq_files) < 2:
-                print(f"[{split_name}] Skipping {choreo_id}: fewer than 2 sequences")
+    counts = {"train": [0, 0], "val": [0, 0], "test": [0, 0]}  # [ok, fail]
+
+    for key, dancers in sorted(index.items()):
+        if BENCHMARK_DANCER not in dancers:
+            continue
+        bench_path = dancers[BENCHMARK_DANCER]
+        prefix, music, choreo = key
+        split = choreo_split(choreo)
+
+        for learner_dancer in LEARNER_DANCERS:
+            if learner_dancer not in dancers:
                 continue
 
-            # Use first sequence as benchmark; pair with each other sequence
-            bench_path = seq_files[0]
-            bench_kp   = load_aist_keypoints(bench_path)
+            learner_path = dancers[learner_dancer]
+            pair_id  = f"{bench_path.stem}_vs_{learner_path.stem}"
+            out_path = out_dirs[split] / f"{pair_id}.npz"
 
-            for learner_path in seq_files[1:]:
-                pair_id  = f"{bench_path.stem}_vs_{learner_path.stem}"
-                out_path = out_dir / f"{pair_id}.npz"
-                if out_path.exists():
-                    n_ok += 1
-                    continue
+            if out_path.exists():
+                counts[split][0] += 1
+                continue
 
-                learner_kp = load_aist_keypoints(learner_path)
-                ok = process_pair(bench_kp, learner_kp, out_path)
-                if ok:
-                    n_ok += 1
-                    print(f"  [{split_name}] Saved: {pair_id}")
-                else:
-                    n_fail += 1
+            bench_kp   = np.load(str(bench_path))
+            learner_kp = np.load(str(learner_path))
+            ok = process_pair(bench_kp, learner_kp, out_path)
 
-        print(f"[{split_name}] Done — {n_ok} pairs saved, {n_fail} failed.")
+            if ok:
+                counts[split][0] += 1
+                print(f"  [{split}] {pair_id}")
+            else:
+                counts[split][1] += 1
 
-    print("\nbuild_dataset.py complete.")
+    print("\n=== Summary ===")
+    for split, (ok, fail) in counts.items():
+        print(f"  {split:5s}  {ok} saved, {fail} failed")
+    print("build_dataset.py complete.")
 
 
 if __name__ == "__main__":
