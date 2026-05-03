@@ -50,10 +50,10 @@ echo "============================================"
 # ---- Environment setup ----
 cd "$SLURM_SUBMIT_DIR"
 
-# Load Oscar modules
-module load python/3.11.0
-module load cuda/11.8.0
-module load ffmpeg/6.0                   # needed by OpenCV for video writing
+# Load Oscar modules (use module spider python/cuda/ffmpeg to find exact names)
+module load python/3.9.21s-rv63
+module load cuda/12.1.1-txhkv4h          # update if your Oscar has a different cuda
+module load ffmpeg                        # update with versioned name if needed
 
 # Activate virtual environment
 # Create it once with:  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
