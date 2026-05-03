@@ -1,0 +1,35 @@
+decisions_ref: docs/project_decisions.md
+
+# HRNet-W32 pose training from random initialization.
+# Pretrained keypoint/pose weights are forbidden.
+
+stage: hrnet_aist_only
+data_config: configs/data/pose_train.yaml
+model_config: configs/model/hrnet_w32.yaml
+output_dir: data/processed/train_hrnet_w32
+
+dataset_mix:
+  aistpp: 1.0
+
+epochs: 50
+batch_size: 16
+num_workers: 6
+optimizer:
+  name: adamw
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+scheduler:
+  name: cosine
+  warmup_epochs: 5
+  min_lr: 1.0e-6
+
+loss:
+  name: joint_mse_with_visibility
+  use_target_weight: true
+
+eval_every_n_epochs: 2
+save_every_n_epochs: 5
+log_every_n_steps: 50
+
+resume_from: null
+init_from: null

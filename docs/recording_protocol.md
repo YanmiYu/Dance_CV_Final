@@ -7,10 +7,25 @@ this protocol so that the scoring pipeline is comparing like for like.
 
 - Camera at chest / waist height.
 - Full body visible end to end (head to feet), including during extreme moves.
+- Prefer landscape or a farther camera placement over close portrait framing.
+- Hands, elbows, knees, and feet must not touch or leave the image boundary.
 - Stable tripod. No handheld.
 - No zoom during the clip.
 - Consistent distance from camera across benchmark and imitation takes.
 - Plain / uncluttered background when possible.
+
+## Capture QA
+
+- Run the detector audit before accepting a clip into the benchmark/imitation
+  set.
+- Accept only clips where the primary person is detected in nearly every
+  sampled frame and the detector box has comfortable padding from all image
+  edges.
+- Re-record instead of relying on software crop fixes when the audit shows
+  repeated edge contact, missing hands/feet, strong occlusion, or another
+  person being selected as the primary subject.
+- Save the audit JSON and bbox preview frames beside the clip or under
+  `data/processed/detector/` so bad takes can be traced later.
 
 ## Clip bounds
 

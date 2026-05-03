@@ -57,13 +57,28 @@ def _run_pose_if_needed(
     model_config: str,
     ckpt: str,
     out_dir: Path,
+    *,
+    crop_mode: str = "detector_union",
+    detector_kwargs: Optional[dict] = None,
 ) -> Path:
     """Run ``src.infer.run_pose_on_video.run`` and return its out_dir path."""
     if (out_dir / "poses.npy").exists():
-        return out_dir
+        existing_mode = None
+        meta_path = out_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                existing_mode = meta.get("crop_mode") or (meta.get("crop") or {}).get("mode")
+            except Exception:
+                existing_mode = None
+        # Older prediction caches predate crop metadata and were motion-crop based.
+        existing_mode = existing_mode or "motion"
+        if existing_mode == crop_mode:
+            return out_dir
+        print(f"recomputing {out_dir}: cached crop_mode={existing_mode!r}, requested={crop_mode!r}")
     from src.infer.run_pose_on_video import run as _run
 
-    _run(video_path, model_config, ckpt, str(out_dir))
+    _run(video_path, model_config, ckpt, str(out_dir), crop_mode=crop_mode, **(detector_kwargs or {}))
     return out_dir
 
 
@@ -213,15 +228,21 @@ def run(
     compare_config: str,
     out_root: str,
     render_video: bool = True,
+    crop_mode: str = "detector_union",
+    detector_kwargs: Optional[dict] = None,
 ) -> Path:
     out_root = ensure_dir(out_root)
     cfg = load_yaml(compare_config)
 
     bench_pred = _run_pose_if_needed(
-        benchmark_video, model_config, ckpt, out_root / "benchmark_pose"
+        benchmark_video, model_config, ckpt, out_root / "benchmark_pose",
+        crop_mode=crop_mode,
+        detector_kwargs=detector_kwargs,
     )
     user_pred = _run_pose_if_needed(
-        user_video, model_config, ckpt, out_root / "user_pose"
+        user_video, model_config, ckpt, out_root / "user_pose",
+        crop_mode=crop_mode,
+        detector_kwargs=detector_kwargs,
     )
 
     bench_raw = np.load(bench_pred / "poses.npy")
@@ -316,12 +337,31 @@ def _main() -> None:
     p.add_argument("--compare-config", default="configs/data/compare.yaml")
     p.add_argument("--out", default="data/reports/run_latest")
     p.add_argument("--no-video", action="store_true")
+    p.add_argument("--crop-mode", choices=["detector_union", "motion"], default="detector_union")
+    p.add_argument("--detector-sample-stride", type=int, default=10)
+    p.add_argument("--detector-max-samples", type=int, default=80)
+    p.add_argument("--detector-score-threshold", type=float, default=0.7)
+    p.add_argument("--detector-pad-ratio", type=float, default=0.35)
+    p.add_argument("--detector-min-detection-rate", type=float, default=0.6)
+    p.add_argument("--detector-min-edge-margin", type=float, default=0.03)
+    p.add_argument("--detector-max-edge-contact-rate", type=float, default=0.0)
     args = p.parse_args()
+    detector_kwargs = {
+        "detector_sample_stride": args.detector_sample_stride,
+        "detector_max_samples": args.detector_max_samples,
+        "detector_score_threshold": args.detector_score_threshold,
+        "detector_pad_ratio": args.detector_pad_ratio,
+        "detector_min_detection_rate": args.detector_min_detection_rate,
+        "detector_min_edge_margin": args.detector_min_edge_margin,
+        "detector_max_edge_contact_rate": args.detector_max_edge_contact_rate,
+    }
     out = run(
         args.benchmark, args.user,
         args.model_config, args.ckpt,
         args.compare_config, args.out,
         render_video=not args.no_video,
+        crop_mode=args.crop_mode,
+        detector_kwargs=detector_kwargs,
     )
     print(f"report written to {out}")
 

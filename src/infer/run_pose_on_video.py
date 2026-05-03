@@ -1,4 +1,4 @@
-"""Run pose inference on a video (single person, no pretrained detector).
+"""Run pose inference on a video (single person).
 
 Outputs (in ``--out-dir``):
   poses.npy        shape (T, 17, 3)  -- (x, y, confidence) in original-image coords
@@ -19,6 +19,7 @@ import torch
 from src.datasets.coco_pose_dataset import get_affine_transform
 from src.datasets.common import NUM_JOINTS, bbox_to_center_scale
 from src.infer.bbox_smoother import EMABBoxSmoother
+from src.infer.detector_crop import TorchVisionPersonDetector, build_detector_union_crop
 from src.infer.motion_crop import MotionCropper
 from src.models.decode import decode_heatmaps_to_image
 from src.train.engine import build_model, _load_state_from_internal_ckpt  # noqa: F401
@@ -50,6 +51,15 @@ def run(
     input_size=(256, 192),
     heatmap_size=(64, 48),
     init_bbox: Optional[tuple] = None,
+    crop_mode: str = "detector_union",
+    detector=None,
+    detector_sample_stride: int = 10,
+    detector_max_samples: int = 80,
+    detector_score_threshold: float = 0.7,
+    detector_pad_ratio: float = 0.35,
+    detector_min_detection_rate: float = 0.6,
+    detector_min_edge_margin: float = 0.03,
+    detector_max_edge_contact_rate: float = 0.0,
     device: Optional[str] = None,
 ):
     out_dir = ensure_dir(out_dir)
@@ -61,14 +71,59 @@ def run(
     model = build_model(model_cfg).to(device_t).eval()
     _load_state_from_internal_ckpt(model, ckpt_path)
 
+    meta = ffprobe_meta(video_path)
+    crop_mode = crop_mode.lower()
+    fixed_bbox: Optional[np.ndarray] = None
+    cropper: Optional[MotionCropper] = None
+    smoother: Optional[EMABBoxSmoother] = None
+    crop_meta: dict = {"mode": crop_mode}
+
+    if crop_mode == "detector_union":
+        det = detector or TorchVisionPersonDetector(
+            score_threshold=detector_score_threshold,
+            device=str(device_t),
+        )
+        crop_result = build_detector_union_crop(
+            video_path,
+            det,
+            input_size=input_size,
+            sample_stride=detector_sample_stride,
+            max_samples=detector_max_samples,
+            pad_ratio=detector_pad_ratio,
+            min_detection_rate=detector_min_detection_rate,
+            min_edge_margin_ratio=detector_min_edge_margin,
+            max_edge_contact_rate=detector_max_edge_contact_rate,
+            fallback_bbox=tuple(init_bbox) if init_bbox is not None else None,
+        )
+        fixed_bbox = np.asarray(crop_result.bbox_xyxy, dtype=np.float32)
+        crop_meta = crop_result.to_meta()
+        crop_meta["detector"] = {
+            "type": type(det).__name__,
+            "score_threshold": float(detector_score_threshold),
+        }
+    elif crop_mode == "manual":
+        if init_bbox is None:
+            raise ValueError("--crop-mode manual requires --init-bbox x1 y1 x2 y2")
+        fixed_bbox = np.asarray(init_bbox, dtype=np.float32)
+        crop_meta = {
+            "mode": "manual",
+            "bbox_xyxy": [float(v) for v in fixed_bbox],
+        }
+    elif crop_mode == "motion":
+        cropper = MotionCropper()
+        smoother = EMABBoxSmoother(alpha=0.35)
+        if init_bbox is not None:
+            smoother.update(init_bbox)
+        crop_meta = {
+            "mode": "motion",
+            "init_bbox": [float(v) for v in init_bbox] if init_bbox is not None else None,
+        }
+    else:
+        raise ValueError(f"Unknown crop_mode: {crop_mode!r}")
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
-    meta = ffprobe_meta(video_path)
-    cropper = MotionCropper()
-    smoother = EMABBoxSmoother(alpha=0.35)
-    if init_bbox is not None:
-        smoother.update(init_bbox)
 
     poses: list[np.ndarray] = []
     bboxes: list[np.ndarray] = []
@@ -77,11 +132,15 @@ def run(
             ok, frame = cap.read()
             if not ok:
                 break
-            prop = cropper.propose(frame)
-            smoothed = smoother.update(prop) if prop is not None else smoother.update(None)
-            if smoothed is None:
-                h, w = frame.shape[:2]
-                smoothed = np.array(MotionCropper._center_fallback(h, w), dtype=np.float32)
+            if fixed_bbox is not None:
+                smoothed = fixed_bbox.copy()
+            else:
+                assert cropper is not None and smoother is not None
+                prop = cropper.propose(frame)
+                smoothed = smoother.update(prop) if prop is not None else smoother.update(None)
+                if smoothed is None:
+                    h, w = frame.shape[:2]
+                    smoothed = np.array(MotionCropper._center_fallback(h, w), dtype=np.float32)
 
             x, center, scale = _prep_input(frame, smoothed, input_size)
             with torch.no_grad():
@@ -117,6 +176,8 @@ def run(
                 "num_frames": meta.num_frames,
                 "width": meta.width,
                 "height": meta.height,
+                "crop_mode": crop_mode,
+                "crop": crop_meta,
             },
             indent=2,
         )
@@ -133,6 +194,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--init-bbox", nargs=4, type=float, default=None, help="x1 y1 x2 y2 fallback bbox")
     p.add_argument("--input-size", nargs=2, type=int, default=[256, 192])
     p.add_argument("--heatmap-size", nargs=2, type=int, default=[64, 48])
+    p.add_argument("--crop-mode", choices=["detector_union", "motion", "manual"], default="detector_union")
+    p.add_argument("--detector-sample-stride", type=int, default=10)
+    p.add_argument("--detector-max-samples", type=int, default=80)
+    p.add_argument("--detector-score-threshold", type=float, default=0.7)
+    p.add_argument("--detector-pad-ratio", type=float, default=0.35)
+    p.add_argument("--detector-min-detection-rate", type=float, default=0.6)
+    p.add_argument("--detector-min-edge-margin", type=float, default=0.03)
+    p.add_argument("--detector-max-edge-contact-rate", type=float, default=0.0)
+    p.add_argument("--device", default=None)
     return p
 
 
@@ -146,6 +216,15 @@ def main() -> None:
         input_size=tuple(args.input_size),
         heatmap_size=tuple(args.heatmap_size),
         init_bbox=tuple(args.init_bbox) if args.init_bbox else None,
+        crop_mode=args.crop_mode,
+        detector_sample_stride=args.detector_sample_stride,
+        detector_max_samples=args.detector_max_samples,
+        detector_score_threshold=args.detector_score_threshold,
+        detector_pad_ratio=args.detector_pad_ratio,
+        detector_min_detection_rate=args.detector_min_detection_rate,
+        detector_min_edge_margin=args.detector_min_edge_margin,
+        detector_max_edge_contact_rate=args.detector_max_edge_contact_rate,
+        device=args.device,
     )
 
 

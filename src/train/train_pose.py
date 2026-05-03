@@ -1,8 +1,9 @@
 """Pose training CLI.
 
-Trains from scratch on AIST++ 2D keypoints paired with data/raw_videos/.
-See docs/project_decisions.md sections 1 and 6: no pretrained weights, and
-AIST++ is the only allowed supervised label source.
+Trains pose/keypoint models from scratch on allowed supervised keypoint
+sources. See docs/project_decisions.md sections 1 and 6: no pretrained
+keypoint weights; allowed labels are AIST++ plus optional human-labeled
+custom_dance frames.
 
 Usage::
 
@@ -14,25 +15,18 @@ import argparse
 from pathlib import Path
 from typing import Dict
 
-from src.datasets.mixed_pose_dataset import build_mixed_from_configs
-from src.train.engine import (
-    evaluate,
-    make_loader,
-    make_train_ctx,
-    save_checkpoint,
-    train_one_epoch,
-)
-from src.utils.config import load_yaml
 from src.utils.seed import seed_everything
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Train a pose model from scratch on AIST++ labels. See docs/project_decisions.md.")
+    p = argparse.ArgumentParser(description="Train a pose model from scratch on allowed keypoint labels. See docs/project_decisions.md.")
     p.add_argument("--train", required=True, help="configs/train/train.yaml")
     p.add_argument("--model", default=None, help="override model config path")
     p.add_argument("--max-items-per-source", type=int, default=None, help="debug: cap per-source dataset size")
     p.add_argument("--epoch-size", type=int, default=None, help="override virtual epoch size")
     p.add_argument("--smoke-steps", type=int, default=0, help="debug: run only N steps total")
+    p.add_argument("--batch-size", type=int, default=None, help="debug: override training config batch size")
+    p.add_argument("--num-workers", type=int, default=None, help="debug: override training config dataloader workers")
     return p
 
 
@@ -44,32 +38,60 @@ def _require_no_external_weights(model_cfg: Dict) -> None:
         )
 
 
-_ALLOWED_TRAIN_SOURCES = {"aistpp"}
+_ALLOWED_TRAIN_SOURCES = {"aistpp", "custom_dance"}
 
 
-def _require_aistpp_only(train_cfg: Dict) -> None:
+def _require_allowed_train_sources(train_cfg: Dict, data_cfg: Dict) -> None:
     mix = train_cfg.get("dataset_mix") or {}
     bad = [k for k, w in mix.items() if float(w) > 0 and k not in _ALLOWED_TRAIN_SOURCES]
     if bad:
         raise SystemExit(
-            f"Refusing to train: only AIST++ labels paired with data/raw_videos/ are allowed "
-            f"as a supervised source (docs/project_decisions.md section 6). "
+            f"Refusing to train: only AIST++ and human-labeled custom_dance frames "
+            f"are allowed as supervised sources (docs/project_decisions.md section 6). "
             f"Got extra sources with non-zero weight: {bad}."
         )
-    if float(mix.get("aistpp", 0)) <= 0:
+    if not any(float(w) > 0 for w in mix.values()):
         raise SystemExit(
-            "Refusing to train: dataset_mix.aistpp must be > 0. "
-            "docs/project_decisions.md section 6 restricts supervised labels to AIST++."
+            "Refusing to train: dataset_mix must include at least one positive allowed source."
         )
+    if float(mix.get("custom_dance", 0)) > 0:
+        sub = (data_cfg.get("datasets") or {}).get("custom_dance") or {}
+        missing = []
+        if not sub.get("enabled", True):
+            missing.append("datasets.custom_dance.enabled")
+        for key in ("annotations", "val_annotations"):
+            path = sub.get(key)
+            if not path or not Path(path).exists():
+                missing.append(f"datasets.custom_dance.{key}")
+        if missing:
+            raise SystemExit(
+                "Refusing to train with custom_dance: manual labels must exist before "
+                f"setting dataset_mix.custom_dance > 0. Missing: {missing}."
+            )
 
 
 def main() -> None:
+    from src.utils.config import load_yaml
+
     args = _build_parser().parse_args()
     train_cfg = load_yaml(args.train)
+    if args.batch_size is not None:
+        train_cfg["batch_size"] = int(args.batch_size)
+    if args.num_workers is not None:
+        train_cfg["num_workers"] = int(args.num_workers)
     data_cfg = load_yaml(train_cfg["data_config"])
     model_cfg = load_yaml(args.model or train_cfg["model_config"])
     _require_no_external_weights(model_cfg)
-    _require_aistpp_only(train_cfg)
+    _require_allowed_train_sources(train_cfg, data_cfg)
+
+    from src.datasets.mixed_pose_dataset import build_mixed_from_configs
+    from src.train.engine import (
+        evaluate,
+        make_loader,
+        make_train_ctx,
+        save_checkpoint,
+        train_one_epoch,
+    )
 
     seed_everything(42)
 

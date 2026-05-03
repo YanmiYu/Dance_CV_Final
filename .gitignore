@@ -9,8 +9,12 @@ __pycache__/
 # Runtime data
 data/raw_videos/*
 !data/raw_videos/.gitkeep
+!data/raw_videos/custom_dance/
+!data/raw_videos/custom_dance/.gitkeep
 data/raw_frames/*
 !data/raw_frames/.gitkeep
+!data/raw_frames/custom_dance/
+!data/raw_frames/custom_dance/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
 data/predictions/*
@@ -19,6 +23,8 @@ data/reports/*
 !data/reports/.gitkeep
 data/labels/*
 !data/labels/.gitkeep
+!data/labels/custom_dance/
+!data/labels/custom_dance/.gitkeep
 data/keypoints2d/*
 !data/keypoints2d/.gitkeep
 data/manifests/*.parquet
