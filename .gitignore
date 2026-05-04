@@ -16,7 +16,6 @@ data/test/
 
 # Model weights & checkpoints
 checkpoints/
-models/
 
 # Jupyter
 .ipynb_checkpoints/

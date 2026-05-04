@@ -12,14 +12,72 @@ No data collection is required. Training and testing use open-source dance datas
 
 ---
 
-## Team Roles
+## Team Roles & Branch Map
 
-| Member | Primary Focus |
-|--------|--------------|
-| Member 1 | Pose estimation & keypoint extraction |
-| Member 2 | Motion alignment, feature engineering & model training |
-| Member 3 | Dataset preparation, label generation & model evaluation |
-| Member 4 | System integration, visualization & Streamlit demo |
+| Branch | Owner | Primary Contribution |
+|--------|-------|----------------------|
+| `baseline` | Steven | Pipeline architecture, repo structure, DTW alignment, scoring & feedback |
+| `max` | Max | SimpleBaseline & HRNet-W32 pose models from scratch + YOLOv8 crop |
+| `stevenmerge` | Steven | GNN pose encoder (128-dim embeddings), embedding-space DTW, combined score |
+| `Mia` | Mia | LSTM Temporal Error Detector, binary weak supervision, interval detection |
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              Dance Choreography Practice Tool — Branch Pipeline              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   benchmark.mp4  ──┐                                                         ║
+║                    ▼                                                         ║
+║   learner.mp4   ──▶  ┌─────────────────────────────────────────────────┐    ║
+║                      │  STAGE 1 · Pose Estimation         branch: max  │    ║
+║                      │                                                  │    ║
+║                      │  YOLOv8 crop ──▶ SimpleBaseline / HRNet-W32     │    ║
+║                      │  ResNet backbone + 3 deconv layers               │    ║
+║                      │  → 17-joint heatmaps → (x, y) per frame         │    ║
+║                      └────────────────────┬────────────────────────────┘    ║
+║                                           │  (T, 17, 2)  keypoints           ║
+║                                           ▼                                  ║
+║                      ┌─────────────────────────────────────────────────┐    ║
+║                      │  STAGE 2 · Normalize + Align    branch: baseline│    ║
+║                      │                                                  │    ║
+║                      │  hip-center + torso-scale                        │    ║
+║                      │  DTW on raw coordinates  →  aligned frame pairs  │    ║
+║                      └─────────┬─────────────────────────┬─────────────┘    ║
+║                                │                         │                   ║
+║                    (geometric) │              (embedding)│                   ║
+║                                ▼                         ▼                   ║
+║         ┌──────────────────────────┐    ┌────────────────────────────────┐  ║
+║         │ STAGE 3a · Raw Score     │    │ STAGE 3b · GNN Embed + Score   │  ║
+║         │        branch: baseline  │    │           branch: stevenmerge  │  ║
+║         │                          │    │                                │  ║
+║         │ per-joint Euclidean err  │    │ PoseGNNEncoder (17 joints →   │  ║
+║         │ per-part weighted score  │    │   128-dim L2 embedding)        │  ║
+║         │ worst-window ranking     │    │ DTW in embedding space         │  ║
+║         │                          │    │ cosine similarity heatmap      │  ║
+║         └───────────┬──────────────┘    └──────────────┬─────────────── ┘  ║
+║                     │                                   │                   ║
+║                     │   pose-geometry  0.6              │  embed-sim  0.3   ║
+║                     └─────────────────┬─────────────────┘                   ║
+║                                       │  combined score + 24-dim diff feats  ║
+║                                       ▼                                      ║
+║                      ┌─────────────────────────────────────────────────┐    ║
+║                      │  STAGE 4 · Temporal Error Detection  branch: Mia│    ║
+║                      │                                                  │    ║
+║                      │  LSTM (input=24, hidden=64, layers=2)            │    ║
+║                      │  → P(off) per frame per body part                │    ║
+║                      │  P(off) > 0.5 for ≥ 0.5 s → deviation interval  │    ║
+║                      └────────────────────┬────────────────────────────┘    ║
+║                                           │                                  ║
+║                                           ▼                                  ║
+║                      ┌─────────────────────────────────────────────────┐    ║
+║                      │  OUTPUT                                          │    ║
+║                      │  • overall score (0–100)                         │    ║
+║                      │  • timestamped deviation intervals per body part  │    ║
+║                      │  • embedding similarity heatmap                  │    ║
+║                      │  • human-readable feedback messages              │    ║
+║                      └─────────────────────────────────────────────────┘    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
