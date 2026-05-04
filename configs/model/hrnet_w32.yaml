@@ -1,12 +1,14 @@
 decisions_ref: docs/project_decisions.md
 
-# HRNet-W32 (Phase 6.2). Final model, trained FROM SCRATCH.
-# No pretrained weights. Same input/output format as simple_baseline so that
-# downstream inference/compare code does not change.
+# HRNet-W32 (Phase 6.2). Final model.
+# Backbone is initialized from ImageNet (see project_decisions.md section 1,
+# 2026-05-04 revision); the pose head stays Kaiming-initialized. Same
+# input/output format as simple_baseline so downstream code does not change.
 
 name: hrnet_w32
-pretrained: false
+pretrained: false  # legacy field; must stay false
 init: kaiming
+pretrained_backbone_path: data/external/pretrained/hrnetv2_w32_imagenet.pth
 
 stem:
   out_channels: 64

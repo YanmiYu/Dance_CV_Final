@@ -1,0 +1,53 @@
+# Integrated dance-CV pipeline config. The default mirrors the project diagram:
+# YOLOv8 crop proposals -> parallel pose/embedding streams -> temporal scoring
+# -> fusion. Flip enabled flags as checkpoints become available.
+
+preprocessing:
+  crop_mode: detector_union
+  detector_backend: yolov8      # "yolov8" or "torchvision"
+  detector_model: yolov8n.pt
+  detector_sample_stride: 10
+  detector_max_samples: 80
+  detector_score_threshold: 0.7
+  detector_pad_ratio: 0.35
+  detector_min_detection_rate: 0.6
+  detector_min_edge_margin: 0.03
+  detector_max_edge_contact_rate: 0.0
+
+models:
+  hrnet:
+    enabled: true
+    config:     configs/model/hrnet_w32.yaml
+    checkpoint: data/processed/train_hrnet_w32/best.pt
+  simple_baseline:
+    enabled: false
+    config:     configs/model/simple_baseline.yaml
+    checkpoint: data/processed/simple_baseline/best.pt
+  gnn:
+    enabled: true
+    upstream: hrnet
+    checkpoint: checkpoints/pose_gnn_encoder_oscar.pt
+
+# When the Mia LSTM checkpoint is dropped into checkpoints/lstm/best_model.pt,
+# flip enabled to true. Until then, the keypoint streams use the threshold head
+# on geometric per-part errors instead of LSTM probabilities.
+lstm:
+  enabled: false
+  checkpoint: checkpoints/lstm/best_model.pt
+
+error_detection:
+  threshold: 0.25       # torso-length error above which threshold head flags a frame
+  min_duration_s: 0.5
+
+fusion:
+  similarity_weight: 0.4
+  off_threshold: 0.5
+
+scoring:
+  body_part_weights:
+    LEFT_ARM:  1.3
+    RIGHT_ARM: 1.3
+    LEFT_LEG:  0.7
+    RIGHT_LEG: 0.7
+    TORSO:     1.1
+    HEAD:      0.8

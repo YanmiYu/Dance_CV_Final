@@ -4,18 +4,30 @@ This file is the single source of truth for the project scope. Every config,
 script, and module MUST refer back to these decisions. Do not relax any of
 these without updating this document first.
 
-## 1. No pretrained weights — ever
+## 1. No pretrained keypoint weights
 
 - No pretrained pose model (OpenPose / MediaPipe / MMPose / ViTPose / ...).
-- No pretrained object/person detector.
 - No ImageNet / COCO-Detection initialization for any backbone.
 - No self-supervised foundation-model checkpoints.
-- All weights are initialized randomly (Kaiming / normal) and trained from
-  scratch on labeled keypoint data we prepare ourselves.
+- All keypoint/pose model weights are initialized randomly (Kaiming / normal)
+  and trained from scratch on labeled keypoint data we prepare ourselves.
+- Pretrained person detectors are allowed only for capture quality audit and
+  inference-time bounding-box crop proposals. Detector outputs are never pose
+  labels, never pseudo-labels, and never used to initialize keypoint models.
 
 Enforcement: model factory functions in `src/models/` MUST NOT load weights
 from any external source. Loading state dicts is only permitted from our own
-training checkpoints saved under `data/processed/checkpoints/`.
+training checkpoints saved under `data/processed/`.
+
+Revision (2026-05-04): section 1 amended for HRNet only. ImageNet
+classification weights for the HRNet backbone (stem + stage1..stage4 +
+transitions) are permitted as initialization. The pose head remains randomly
+initialized. All other constraints stand: no pretrained pose/keypoint weights,
+no detection weights as model initialization, and no self-supervised foundation
+checkpoints. Whitelisted file: `hrnetv2_w32_imagenet_pretrained.pth`, stored
+locally at `data/external/pretrained/hrnetv2_w32_imagenet.pth`, loaded only by
+`src/models/hrnet_pretrained.py` as backbone-only with `strict=False`.
+`init_from` continues to require `data/processed/`.
 
 ## 2. Task definition
 
@@ -50,19 +62,23 @@ training checkpoints saved under `data/processed/checkpoints/`.
 
 - `data/raw_urls/*.csv`: download lists for the AIST dance videos that
   populate `data/raw_videos/`.
-- Supervised pose labels come ONLY from AIST++ 2D keypoints paired with
-  those `data/raw_videos/` clips. COCO and CrowdPose are not used.
+- Supervised pose labels come from AIST++ 2D keypoints paired with those
+  `data/raw_videos/` clips, plus optional human-labeled target-domain dance
+  frames stored under `data/labels/custom_dance/`. COCO and CrowdPose are not
+  used as supervised training sources.
 - The AIST++ per-video 2D keypoint files must be placed under
   `data/labels/aistpp/keypoints2d_raw/<video_stem>.{pkl,npy}`; the
   `scripts/prepare_aist_training_data.py` pipeline is the ONLY supported
   way to build `data/labels/aistpp/internal_train.jsonl` and
   `internal_val.jsonl`.
 - Our own paired benchmark/imitation videos are for downstream evaluation
-  and calibration, NOT for supervised pose-label training (unless
-  explicitly hand-annotated into `data/labels/custom_dance_val/`).
+  and calibration, NOT for supervised pose-label training unless individual
+  frames are explicitly hand-annotated into `data/labels/custom_dance/`.
 
 Revision (2026-04-22): narrowed supervised-label policy to AIST++ only,
 following the decision to train solely on `data/raw_videos/`.
+Revision (2026-05-02): allow pretrained person detectors for crop/audit only,
+and allow human-labeled target-domain dance frames as supervised keypoint data.
 
 ## 7. Pipeline order (never skip forward)
 
@@ -76,7 +92,7 @@ following the decision to train solely on `data/raw_videos/`.
 7. Simple Baseline model — prove the training loop.
 8. HRNet-W32 — final model.
 9. Single-stage training on AIST++ labels from `data/raw_videos/`.
-10. Motion-based video inference.
+10. Detector-backed full-body crop inference, with motion/manual fallback.
 11. Temporal smoothing.
 12. Normalization -> features -> DTW -> score -> feedback.
 13. Streamlit demo (last, not first).

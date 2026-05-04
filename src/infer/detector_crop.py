@@ -386,3 +386,78 @@ class TorchVisionPersonDetector:
             if int(label) == 1 and float(score) >= self.score_threshold:
                 people.append(PersonDetection(tuple(float(v) for v in box), float(score)))
         return people
+
+
+class YOLOv8PersonDetector:
+    """COCO person detector wrapper using Ultralytics YOLOv8."""
+
+    def __init__(
+        self,
+        *,
+        score_threshold: float = 0.7,
+        model_name: str = "yolov8n.pt",
+        device: Optional[str] = None,
+    ) -> None:
+        self.score_threshold = float(score_threshold)
+        self.model_name = model_name
+        self.device = device
+        try:
+            from ultralytics import YOLO
+        except Exception as e:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Ultralytics is required for YOLOv8 detector crops. "
+                "Install `ultralytics` or set detector_backend: torchvision."
+            ) from e
+
+        try:
+            self.model = YOLO(model_name)
+        except Exception as e:  # pragma: no cover - network/cache dependent
+            raise RuntimeError(
+                f"Could not load YOLOv8 model {model_name!r}. Make sure the "
+                "weights are available locally or allow Ultralytics to download them once."
+            ) from e
+
+    def detect(self, frame_bgr: np.ndarray) -> Sequence[PersonDetection]:
+        import cv2
+
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        kwargs = {
+            "classes": [0],
+            "conf": self.score_threshold,
+            "verbose": False,
+        }
+        if self.device:
+            kwargs["device"] = self.device
+        results = self.model.predict(rgb, **kwargs)
+        people: List[PersonDetection] = []
+        if not results:
+            return people
+        boxes = getattr(results[0], "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return people
+        xyxy = boxes.xyxy.detach().cpu().numpy()
+        scores = boxes.conf.detach().cpu().numpy()
+        for box, score in zip(xyxy, scores):
+            if float(score) >= self.score_threshold:
+                people.append(PersonDetection(tuple(float(v) for v in box), float(score)))
+        return people
+
+
+def build_person_detector(
+    backend: str,
+    *,
+    score_threshold: float = 0.7,
+    device: Optional[str] = None,
+    model_name: Optional[str] = None,
+) -> PersonDetector:
+    """Construct a detector backend for inference-time person crops."""
+    backend = backend.lower()
+    if backend in {"torchvision", "fasterrcnn", "fasterrcnn_resnet50_fpn_v2"}:
+        return TorchVisionPersonDetector(score_threshold=score_threshold, device=device)
+    if backend in {"yolo", "yolov8", "ultralytics"}:
+        return YOLOv8PersonDetector(
+            score_threshold=score_threshold,
+            device=device,
+            model_name=model_name or "yolov8n.pt",
+        )
+    raise ValueError(f"Unknown detector backend: {backend!r}")

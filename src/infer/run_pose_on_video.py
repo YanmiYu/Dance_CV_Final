@@ -19,7 +19,7 @@ import torch
 from src.datasets.coco_pose_dataset import get_affine_transform
 from src.datasets.common import NUM_JOINTS, bbox_to_center_scale
 from src.infer.bbox_smoother import EMABBoxSmoother
-from src.infer.detector_crop import TorchVisionPersonDetector, build_detector_union_crop
+from src.infer.detector_crop import build_detector_union_crop, build_person_detector
 from src.infer.motion_crop import MotionCropper
 from src.models.decode import decode_heatmaps_to_image
 from src.train.engine import build_model, _load_state_from_internal_ckpt  # noqa: F401
@@ -42,6 +42,12 @@ def _prep_input(frame: np.ndarray, bbox_xyxy, input_size, pixel_std: float = 200
     return x, center, scale
 
 
+def _resolve_device(device: Optional[str]) -> torch.device:
+    if device is None or str(device).lower() == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
 def run(
     video_path: str,
     model_config_path: str,
@@ -53,6 +59,8 @@ def run(
     init_bbox: Optional[tuple] = None,
     crop_mode: str = "detector_union",
     detector=None,
+    detector_backend: str = "torchvision",
+    detector_model: Optional[str] = None,
     detector_sample_stride: int = 10,
     detector_max_samples: int = 80,
     detector_score_threshold: float = 0.7,
@@ -67,7 +75,7 @@ def run(
     if model_cfg.get("pretrained", False):
         raise SystemExit("pretrained=true is forbidden. See docs/project_decisions.md.")
 
-    device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device_t = _resolve_device(device)
     model = build_model(model_cfg).to(device_t).eval()
     _load_state_from_internal_ckpt(model, ckpt_path)
 
@@ -79,9 +87,11 @@ def run(
     crop_meta: dict = {"mode": crop_mode}
 
     if crop_mode == "detector_union":
-        det = detector or TorchVisionPersonDetector(
+        det = detector or build_person_detector(
+            detector_backend,
             score_threshold=detector_score_threshold,
             device=str(device_t),
+            model_name=detector_model,
         )
         crop_result = build_detector_union_crop(
             video_path,
@@ -99,6 +109,8 @@ def run(
         crop_meta = crop_result.to_meta()
         crop_meta["detector"] = {
             "type": type(det).__name__,
+            "backend": detector_backend,
+            "model": getattr(det, "model_name", detector_model),
             "score_threshold": float(detector_score_threshold),
         }
     elif crop_mode == "manual":
@@ -195,6 +207,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-size", nargs=2, type=int, default=[256, 192])
     p.add_argument("--heatmap-size", nargs=2, type=int, default=[64, 48])
     p.add_argument("--crop-mode", choices=["detector_union", "motion", "manual"], default="detector_union")
+    p.add_argument("--detector-backend", choices=["torchvision", "yolov8"], default="torchvision")
+    p.add_argument("--detector-model", default=None, help="YOLOv8 model path/name, e.g. yolov8n.pt")
     p.add_argument("--detector-sample-stride", type=int, default=10)
     p.add_argument("--detector-max-samples", type=int, default=80)
     p.add_argument("--detector-score-threshold", type=float, default=0.7)
@@ -218,6 +232,8 @@ def main() -> None:
         init_bbox=tuple(args.init_bbox) if args.init_bbox else None,
         crop_mode=args.crop_mode,
         detector_sample_stride=args.detector_sample_stride,
+        detector_backend=args.detector_backend,
+        detector_model=args.detector_model,
         detector_max_samples=args.detector_max_samples,
         detector_score_threshold=args.detector_score_threshold,
         detector_pad_ratio=args.detector_pad_ratio,

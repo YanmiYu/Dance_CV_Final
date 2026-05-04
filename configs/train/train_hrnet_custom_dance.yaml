@@ -1,8 +1,9 @@
 decisions_ref: docs/project_decisions.md
 
 # Use this only after human-labeled custom_dance JSONL files exist.
-# The model is still HRNet-W32 from random initialization; custom_dance labels
-# must come from manual annotation, not detector or pose pseudo-labels.
+# The model is HRNet-W32 with the same ImageNet backbone init as
+# configs/train/train_hrnet.yaml; custom_dance labels must come from manual
+# annotation, not detector or pose pseudo-labels.
 
 stage: hrnet_aist_custom_dance
 data_config: configs/data/pose_train.yaml
@@ -18,8 +19,14 @@ batch_size: 16
 num_workers: 6
 optimizer:
   name: adamw
-  lr: 3.0e-4
   weight_decay: 1.0e-4
+  param_groups:
+    backbone:
+      lr: 1.0e-4
+      modules: [stem, stage1, trans_12, stage2, trans_23, stage3, trans_34, stage4]
+    head:
+      lr: 1.0e-3
+      modules: [head]
 scheduler:
   name: cosine
   warmup_epochs: 5

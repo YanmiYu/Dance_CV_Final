@@ -1,7 +1,8 @@
 decisions_ref: docs/project_decisions.md
 
-# HRNet-W32 pose training from random initialization.
-# Pretrained keypoint/pose weights are forbidden.
+# HRNet-W32 pose training: ImageNet-pretrained backbone + random head,
+# fine-tuned end-to-end on AIST++ with differential LR.
+# See docs/project_decisions.md section 1 (2026-05-04 revision).
 
 stage: hrnet_aist_only
 data_config: configs/data/pose_train.yaml
@@ -16,8 +17,14 @@ batch_size: 16
 num_workers: 6
 optimizer:
   name: adamw
-  lr: 3.0e-4
   weight_decay: 1.0e-4
+  param_groups:
+    backbone:
+      lr: 1.0e-4
+      modules: [stem, stage1, trans_12, stage2, trans_23, stage3, trans_34, stage4]
+    head:
+      lr: 1.0e-3
+      modules: [head]
 scheduler:
   name: cosine
   warmup_epochs: 5
