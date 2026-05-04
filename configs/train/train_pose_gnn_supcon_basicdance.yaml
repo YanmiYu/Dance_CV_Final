@@ -1,0 +1,60 @@
+decisions_ref: docs/project_decisions.md
+
+# Supervised contrastive training for the Basic Dance pose embedding model.
+# Trains on AIST++ Basic Dance (situation = sBM) PKL keypoint files.
+
+# ---------------- data ----------------
+# Primary location for filtered Basic Dance PKLs (consolidated cAll files
+# of shape [num_cameras, T, 17, 3]). The index builder also accepts the
+# per-camera layout under data/labels/aistpp/keypoints2d_raw/.
+pkl_root: data/keypoints2d
+index_csv: data/processed/basic_dance_embedding_index.csv
+output_dir: data/processed/train_pose_gnn_supcon_basicdance
+
+situation: sBM
+# When the index is built from cAll files, every cAll PKL expands into 9
+# logical per-camera entries (c01..c09).
+use_cameras: ["c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09"]
+
+# Split mode -- "dance_label" tests generalisation to unseen choreographies.
+# Use "camera" to test view invariance (set val_cameras explicitly below).
+split_mode: dance_label
+val_ratio: 0.2
+val_cameras: null     # used only for split_mode: camera (e.g. ["c08", "c09"])
+seed: 42
+
+# ---------------- windowing ----------------
+window_size: 32
+window_stride: 8
+min_confidence: 0.2
+
+# ---------------- model ----------------
+in_features: 3            # x, y, confidence
+embedding_dim: 128        # window embedding dim (output of projection head)
+frame_embedding_dim: 128  # PoseGNNEncoder output dim used as the frame token
+dropout: 0.1
+pooling: mean             # mean | max
+
+# ---------------- loss ----------------
+temperature: 0.07
+
+# ---------------- batching ----------------
+n_labels_per_batch: 16
+n_samples_per_label: 4    # batch_size = 16 * 4 = 64
+batches_per_epoch: null   # null -> roughly one pass over all samples per epoch
+
+# ---------------- optimisation ----------------
+epochs: 60
+learning_rate: 3.0e-4
+weight_decay: 1.0e-4
+grad_clip: 1.0
+
+# ---------------- runtime ----------------
+device: auto              # auto | cuda | mps | cpu
+num_workers: 4
+save_every: 5             # epochs
+eval_every: 1             # epochs
+log_every: 10             # batches
+
+# Where to copy the best checkpoint so render_report can use it directly.
+deploy_checkpoint: checkpoints/pose_gnn_encoder_basicdance_supcon.pt

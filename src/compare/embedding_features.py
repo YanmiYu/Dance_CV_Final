@@ -34,14 +34,48 @@ def load_pose_gnn_encoder(
     checkpoint_path: str | Path,
     device: str | torch.device = "auto",
 ) -> Tuple[PoseGNNEncoder, torch.device]:
-    """Load a ``PoseGNNEncoder`` checkpoint and return ``(model, device)``."""
+    """Load a ``PoseGNNEncoder`` checkpoint and return ``(model, device)``.
+
+    Supports two checkpoint layouts:
+
+      1. Legacy: a raw ``state_dict`` saved by the old triplet trainer, or a
+         dict with key ``"model"`` and optional ``"embedding_dim"``.
+      2. SupCon temporal trainer (see
+         ``src.train.train_pose_gnn_supcon``): a dict with both ``"model"``
+         (frame-encoder weights for compatibility with this loader) and
+         ``"temporal_model"`` (full :class:`PoseGNNTemporalEncoder` weights).
+         We ignore the temporal head here -- this loader returns only the
+         frame-level encoder used by ``encode_pose_sequence``.
+    """
     device_t = select_torch_device(device) if isinstance(device, str) else device
     ckpt = torch.load(checkpoint_path, map_location=device_t)
-    state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
-    embedding_dim = int(ckpt.get("embedding_dim", 128)) if isinstance(ckpt, dict) else 128
+    if isinstance(ckpt, dict):
+        # Prefer "model" (legacy + new format both put frame-encoder there).
+        # Fall back to "state_dict" (some HF-style saves) and finally to the
+        # whole dict (raw state_dict).
+        if "model" in ckpt:
+            state = ckpt["model"]
+        elif "state_dict" in ckpt:
+            state = ckpt["state_dict"]
+        else:
+            state = ckpt
+        embedding_dim = int(ckpt.get("embedding_dim", 128))
+    else:
+        state = ckpt
+        embedding_dim = 128
 
     model = PoseGNNEncoder(embedding_dim=embedding_dim)
-    model.load_state_dict(state)
+    try:
+        model.load_state_dict(state)
+    except RuntimeError as e:
+        # Common mistake: pointing at a temporal-only checkpoint.
+        if isinstance(ckpt, dict) and "temporal_model" in ckpt and state is ckpt:
+            raise RuntimeError(
+                "Checkpoint contains 'temporal_model' but no plain frame "
+                "'model' state. Re-export the frame encoder weights to use "
+                "with the report pipeline."
+            ) from e
+        raise
     model.to(device_t).eval()
     return model, device_t
 
