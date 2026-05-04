@@ -2,7 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
-checkpoints/
+checkpoints/**/*.pth.bak
 results/
 results_mp/
 results_mediapipe/
