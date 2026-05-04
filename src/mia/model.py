@@ -15,6 +15,7 @@ Inference:  proba = sigmoid(logits) ; flag frame if proba > 0.5
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -89,6 +90,55 @@ def save_checkpoint(model: TemporalErrorDetector, path: str | Path, **meta) -> N
     torch.save({"state_dict": model.state_dict(), **meta}, str(path))
 
 
+def _torch_load(path: str | Path, device: str) -> Any:
+    """Load a checkpoint across supported PyTorch versions.
+
+    Newer PyTorch releases support ``weights_only=True``. Older ones do not,
+    so keep a small fallback for shared lab environments.
+    """
+    try:
+        return torch.load(str(path), map_location=device, weights_only=True)
+    except TypeError:  # pragma: no cover - depends on installed torch version
+        return torch.load(str(path), map_location=device)
+
+
+def _strip_module_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if not state_dict or not all(k.startswith("module.") for k in state_dict):
+        return state_dict
+    return {k.removeprefix("module."): v for k, v in state_dict.items()}
+
+
+def _infer_model_kwargs(
+    state_dict: dict[str, torch.Tensor],
+    meta: dict,
+    explicit_kwargs: dict,
+) -> dict:
+    """Infer architecture knobs saved by this repo, falling back to tensor shapes."""
+    kwargs = dict(explicit_kwargs)
+    for key in ("input_size", "hidden_size", "num_layers", "dropout", "n_parts"):
+        if key not in kwargs and key in meta:
+            kwargs[key] = meta[key]
+
+    weight_ih = state_dict.get("lstm.weight_ih_l0")
+    head_weight = state_dict.get("head.weight")
+    if weight_ih is not None:
+        kwargs.setdefault("input_size", int(weight_ih.shape[1]))
+        kwargs.setdefault("hidden_size", int(weight_ih.shape[0] // 4))
+    if head_weight is not None:
+        kwargs.setdefault("n_parts", int(head_weight.shape[0]))
+
+    if "num_layers" not in kwargs:
+        layer_ids = []
+        for key in state_dict:
+            if key.startswith("lstm.weight_ih_l"):
+                suffix = key.removeprefix("lstm.weight_ih_l")
+                if suffix.isdigit():
+                    layer_ids.append(int(suffix))
+        if layer_ids:
+            kwargs["num_layers"] = max(layer_ids) + 1
+    return kwargs
+
+
 def load_checkpoint(
     path: str | Path,
     device: str = "cpu",
@@ -101,10 +151,20 @@ def load_checkpoint(
     model : TemporalErrorDetector
     meta  : dict — everything saved alongside state_dict (epoch, val_f1, etc.)
     """
-    ckpt = torch.load(str(path), map_location=device, weights_only=True)
-    state_dict = ckpt.pop("state_dict")
-    model = TemporalErrorDetector(**model_kwargs)
+    ckpt = _torch_load(path, device)
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        ckpt = dict(ckpt)
+        state_dict = ckpt.pop("state_dict")
+        meta = ckpt
+    elif isinstance(ckpt, dict):
+        state_dict = ckpt
+        meta = {}
+    else:
+        raise TypeError(f"Unsupported checkpoint format at {path!s}: {type(ckpt)!r}")
+
+    state_dict = _strip_module_prefix(state_dict)
+    model = TemporalErrorDetector(**_infer_model_kwargs(state_dict, meta, model_kwargs))
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    return model, ckpt
+    return model, meta

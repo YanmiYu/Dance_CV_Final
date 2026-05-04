@@ -43,8 +43,9 @@ Outputs in `--out`:
 - `streams.npz`   — per-model error / similarity curves on the canonical time axis
 
 Configure which models/heads run via [`configs/integrate/pipeline.yaml`](configs/integrate/pipeline.yaml).
-Default config: HRNet + SimpleBaseline + GNN enabled; LSTM disabled (no
-checkpoint shipped). The SimpleBaseline config preserves the
+Default config: HRNet + SimpleBaseline + GNN enabled; the Mia LSTM head is
+enabled when `checkpoints/lstm/best_model.pt` exists and otherwise falls back
+to the geometric threshold head. The SimpleBaseline config preserves the
 `simple-baseline-lynn` inference contract: direct bbox-resize crops, RGB channel
 order, and ImageNet normalization.
 
@@ -57,6 +58,36 @@ Required local artifacts:
 | `checkpoints/pose_gnn_encoder_oscar.pt`             | committed by `stevenmerge`   |
 | `checkpoints/lstm/best_model.pt` (optional)         | drop Mia LSTM ckpt to enable |
 | `data/external/pretrained/hrnetv2_w32_imagenet.pth` | `python scripts/download_hrnet_imagenet.py` |
+
+Use an explicit Mia checkpoint without editing YAML:
+
+```bash
+python run.py \
+    --benchmark data/raw_videos/<bench>.mp4 \
+    --learner   data/raw_videos/<user>.mp4 \
+    --out       results/integrate_lstm_run/ \
+    --lstm-checkpoint checkpoints/lstm/best_model.pt \
+    --require-lstm
+```
+
+Build/train/evaluate the LSTM head inside the integrated repo:
+
+```bash
+python scripts/build_lstm_dataset.py \
+    --kp-dir data/keypoints \
+    --out-train data/lstm/train \
+    --out-val data/lstm/val \
+    --out-test data/lstm/test
+
+python -m src.mia.train \
+    --train-dir data/lstm/train \
+    --val-dir data/lstm/val \
+    --checkpoint checkpoints/lstm/best_model.pt
+
+python -m src.mia.evaluate \
+    --test-dir data/lstm/test \
+    --checkpoint checkpoints/lstm/best_model.pt
+```
 
 
 

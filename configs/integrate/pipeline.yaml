@@ -28,11 +28,11 @@ models:
     upstream: hrnet
     checkpoint: checkpoints/pose_gnn_encoder_oscar.pt
 
-# When the Mia LSTM checkpoint is dropped into checkpoints/lstm/best_model.pt,
-# flip enabled to true. Until then, the keypoint streams use the threshold head
-# on geometric per-part errors instead of LSTM probabilities.
+# When the Mia LSTM checkpoint is present, keypoint streams use LSTM
+# probabilities for per-part "off" detection. If the checkpoint is absent, the
+# runner falls back to the geometric threshold head unless --require-lstm is set.
 lstm:
-  enabled: false
+  enabled: true
   checkpoint: checkpoints/lstm/best_model.pt
 
 error_detection:

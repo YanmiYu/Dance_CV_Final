@@ -18,6 +18,21 @@ def main() -> None:
     p.add_argument("--out",       default="results/integrate_run", help="Output directory")
     p.add_argument("--config",    default="configs/integrate/pipeline.yaml")
     p.add_argument("--device",    default=None, help="cpu / cuda / mps; default = auto")
+    p.add_argument(
+        "--lstm-checkpoint",
+        default=None,
+        help="Path to a Mia LSTM checkpoint; enables the LSTM error head when provided",
+    )
+    p.add_argument(
+        "--no-lstm",
+        action="store_true",
+        help="Disable the Mia LSTM head and force geometric-threshold fallback",
+    )
+    p.add_argument(
+        "--require-lstm",
+        action="store_true",
+        help="Fail if the configured/provided LSTM checkpoint cannot be loaded",
+    )
     args = p.parse_args()
 
     report = run(
@@ -26,9 +41,13 @@ def main() -> None:
         output_dir=args.out,
         config_path=args.config,
         device=args.device,
+        lstm_checkpoint=args.lstm_checkpoint,
+        use_lstm=False if args.no_lstm else None,
+        require_lstm=args.require_lstm,
     )
     print(json.dumps({"overall_score": report["overall_score"],
                        "n_intervals": len(report["intervals"]),
+                       "lstm_used": report["lstm_used"],
                        "out": args.out}, indent=2))
 
 

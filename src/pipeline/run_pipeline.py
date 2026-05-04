@@ -32,6 +32,48 @@ def _ensure_dir(path: str) -> Path:
     return p
 
 
+def _resolve_lstm_section(
+    cfg: dict,
+    *,
+    lstm_checkpoint: Optional[str] = None,
+    use_lstm: Optional[bool] = None,
+    require_lstm: bool = False,
+) -> tuple[Optional[str], dict]:
+    """Resolve LSTM config and optional CLI overrides.
+
+    The integrated pipeline can run without a Mia checkpoint by falling back to
+    geometric threshold probabilities. When ``require_lstm`` is true, fail early
+    instead of silently falling back.
+    """
+    section = dict(cfg.get("lstm") or {})
+    if lstm_checkpoint is not None:
+        section["checkpoint"] = lstm_checkpoint
+        section["enabled"] = True
+    if use_lstm is not None:
+        section["enabled"] = bool(use_lstm)
+
+    enabled = bool(section.get("enabled", False))
+    checkpoint = section.get("checkpoint")
+    checkpoint_exists = bool(checkpoint and Path(checkpoint).exists())
+
+    if require_lstm:
+        if not enabled:
+            raise RuntimeError("LSTM was required, but the LSTM section is disabled.")
+        if not checkpoint:
+            raise RuntimeError("LSTM was required, but no checkpoint path was configured.")
+        if not checkpoint_exists:
+            raise FileNotFoundError(f"LSTM checkpoint not found: {checkpoint}")
+
+    cfg["lstm"] = section
+    status = {
+        "enabled": enabled,
+        "checkpoint": checkpoint,
+        "checkpoint_exists": checkpoint_exists,
+        "required": require_lstm,
+    }
+    return (checkpoint if enabled else None), status
+
+
 def _run_pose_for_model(
     model_name: str,
     model_cfg: dict,
@@ -105,10 +147,19 @@ def run(
     *,
     config_path: str = "configs/integrate/pipeline.yaml",
     device: Optional[str] = None,
+    lstm_checkpoint: Optional[str] = None,
+    use_lstm: Optional[bool] = None,
+    require_lstm: bool = False,
 ) -> dict:
     cfg = _load_cfg(config_path)
     out = _ensure_dir(output_dir)
     preprocessing_cfg = cfg.get("preprocessing", {})
+    lstm_ckpt, lstm_status = _resolve_lstm_section(
+        cfg,
+        lstm_checkpoint=lstm_checkpoint,
+        use_lstm=use_lstm,
+        require_lstm=require_lstm,
+    )
 
     # 1. Pose extraction. HRNet runs first so GNN can borrow its keypoints.
     upstream: dict[str, tuple[PoseRunResult, PoseRunResult]] = {}
@@ -128,8 +179,6 @@ def run(
     # 2. Error / similarity streams.
     keypoint_streams = []
     embedding_streams = []
-    lstm_section = cfg.get("lstm", {})
-    lstm_ckpt = lstm_section.get("checkpoint") if lstm_section.get("enabled") else None
     canonical_path = None
     canonical_timestamps = None
 
@@ -177,6 +226,12 @@ def run(
 
     # 4. Persist.
     (out / "report.md").write_text(result.markdown_report)
+    lstm_streams = sorted(result.per_model_part_probs.keys())
+    lstm_status = {
+        **lstm_status,
+        "used": bool(lstm_streams),
+        "streams": lstm_streams,
+    }
     report_json = {
         "overall_score": result.overall_score,
         "intervals": [asdict(iv) for iv in result.intervals],
@@ -189,7 +244,8 @@ def run(
             for k in ("geom_threshold", "off_threshold", "similarity_weight", "min_duration_s")
         },
         "models_enabled": list(upstream.keys()),
-        "lstm_used": lstm_ckpt is not None and Path(lstm_ckpt).exists(),
+        "lstm_used": lstm_status["used"],
+        "lstm": lstm_status,
     }
     (out / "report.json").write_text(json.dumps(report_json, indent=2))
 
