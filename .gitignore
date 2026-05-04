@@ -18,9 +18,6 @@ data/test/
 checkpoints/
 models/
 
-# Generated results
-results/
-
 # Jupyter
 .ipynb_checkpoints/
 

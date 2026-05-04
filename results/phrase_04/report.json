@@ -1,0 +1,56 @@
+{
+  "overall_score": 80.43,
+  "intervals": [
+    {
+      "start_s": 0.0,
+      "end_s": 1.27,
+      "part": "LEFT_ARM",
+      "mean_error": 0.5812
+    },
+    {
+      "start_s": 0.0,
+      "end_s": 1.47,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5715
+    },
+    {
+      "start_s": 4.27,
+      "end_s": 4.67,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5146
+    },
+    {
+      "start_s": 5.07,
+      "end_s": 7.07,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5514
+    },
+    {
+      "start_s": 5.13,
+      "end_s": 7.07,
+      "part": "LEFT_ARM",
+      "mean_error": 0.5458
+    },
+    {
+      "start_s": 7.93,
+      "end_s": 11.87,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5957
+    },
+    {
+      "start_s": 8.0,
+      "end_s": 11.87,
+      "part": "LEFT_ARM",
+      "mean_error": 0.5854
+    }
+  ],
+  "feedback": [
+    "At 0.0 s \u2013 1.3 s your Left Arm is significantly off (1.3 s window).",
+    "At 0.0 s \u2013 1.5 s your Right Arm is significantly off (1.5 s window).",
+    "At 4.3 s \u2013 4.7 s your Right Arm is significantly off (0.4 s window).",
+    "At 5.1 s \u2013 7.1 s your Right Arm is significantly off (2.0 s window).",
+    "At 5.1 s \u2013 7.1 s your Left Arm is significantly off (1.9 s window).",
+    "At 7.9 s \u2013 11.9 s your Right Arm is significantly off (3.9 s window).",
+    "At 8.0 s \u2013 11.9 s your Left Arm is significantly off (3.9 s window)."
+  ]
+}

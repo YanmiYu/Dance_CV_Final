@@ -1,0 +1,14 @@
+{
+  "overall_score": 89.19,
+  "intervals": [
+    {
+      "start_s": 0.0,
+      "end_s": 0.53,
+      "part": "LEFT_ARM",
+      "mean_error": 0.5345
+    }
+  ],
+  "feedback": [
+    "At 0.0 s \u2013 0.5 s your Left Arm is significantly off (0.5 s window)."
+  ]
+}
