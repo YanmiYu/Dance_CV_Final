@@ -79,6 +79,10 @@ Revision (2026-04-22): narrowed supervised-label policy to AIST++ only,
 following the decision to train solely on `data/raw_videos/`.
 Revision (2026-05-02): allow pretrained person detectors for crop/audit only,
 and allow human-labeled target-domain dance frames as supervised keypoint data.
+Revision (2026-05-04): `data/processed/simple_baseline/best.pt` is allowed as
+an imported integration artifact from the `simple-baseline-lynn` branch. That
+branch checkpoint was trained on COCO Keypoints 2017; future supervised training
+on this branch remains limited to AIST++ and human-labeled custom dance frames.
 
 ## 7. Pipeline order (never skip forward)
 

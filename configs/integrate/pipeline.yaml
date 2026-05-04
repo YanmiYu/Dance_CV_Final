@@ -20,7 +20,7 @@ models:
     config:     configs/model/hrnet_w32.yaml
     checkpoint: data/processed/train_hrnet_w32/best.pt
   simple_baseline:
-    enabled: false
+    enabled: true
     config:     configs/model/simple_baseline.yaml
     checkpoint: data/processed/simple_baseline/best.pt
   gnn:

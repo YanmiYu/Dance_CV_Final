@@ -1,12 +1,14 @@
 # CV Tool for Dance Choreography Practice
 
 A computer-vision tool for comparing a student's dance imitation against a
-reference benchmark clip. Pose heads are trained on AIST dance clips in
+reference benchmark clip. The local training pipeline uses AIST dance clips in
 `data/raw_videos/` supervised by AIST++ 2D keypoints; the HRNet branch may
 initialize its backbone from the whitelisted ImageNet checkpoint documented in
-`docs/project_decisions.md`. The system extracts single-person 2D pose per
-frame, aligns the benchmark and imitation with DTW, and produces interpretable
-per-body-part / per-time-window scores plus human-readable feedback.
+`docs/project_decisions.md`, and the integrated SimpleBaseline checkpoint is an
+imported artifact from `simple-baseline-lynn`. The system extracts single-person
+2D pose per frame, aligns the benchmark and imitation with DTW, and produces
+interpretable per-body-part / per-time-window scores plus human-readable
+feedback.
 
 ## Integrated pipeline (this branch)
 
@@ -41,17 +43,18 @@ Outputs in `--out`:
 - `streams.npz`   — per-model error / similarity curves on the canonical time axis
 
 Configure which models/heads run via [`configs/integrate/pipeline.yaml`](configs/integrate/pipeline.yaml).
-Default config: HRNet + GNN enabled; SimpleBaseline disabled (no checkpoint
-shipped); LSTM disabled (no checkpoint shipped). To enable either, drop the
-checkpoint into the path the config points to and flip `enabled: true`.
+Default config: HRNet + SimpleBaseline + GNN enabled; LSTM disabled (no
+checkpoint shipped). The SimpleBaseline config preserves the
+`simple-baseline-lynn` inference contract: direct bbox-resize crops, RGB channel
+order, and ImageNet normalization.
 
 Required local artifacts:
 
 | Path                                                | Source                       |
 | --------------------------------------------------- | ---------------------------- |
 | `data/processed/train_hrnet_w32/best.pt`            | trained on `max` branch      |
+| `data/processed/simple_baseline/best.pt`            | ported from `simple-baseline-lynn` |
 | `checkpoints/pose_gnn_encoder_oscar.pt`             | committed by `stevenmerge`   |
-| `data/processed/simple_baseline/best.pt` (optional) | drop SB ckpt here to enable  |
 | `checkpoints/lstm/best_model.pt` (optional)         | drop Mia LSTM ckpt to enable |
 | `data/external/pretrained/hrnetv2_w32_imagenet.pth` | `python scripts/download_hrnet_imagenet.py` |
 

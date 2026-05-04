@@ -28,9 +28,65 @@ from src.utils.io import ensure_dir
 from src.utils.video import ffprobe_meta
 
 
-def _prep_input(frame: np.ndarray, bbox_xyxy, input_size, pixel_std: float = 200.0):
+def _size_tuple(value, fallback) -> tuple[int, int]:
+    if value is None:
+        return tuple(int(v) for v in fallback)
+    if len(value) != 2:
+        raise ValueError(f"expected a 2-item size, got {value!r}")
+    return int(value[0]), int(value[1])
+
+
+def _crop_to_tensor(
+    crop: np.ndarray,
+    *,
+    color_order: str = "bgr",
+    image_mean: Optional[list[float]] = None,
+    image_std: Optional[list[float]] = None,
+) -> torch.Tensor:
+    order = str(color_order).lower()
+    if order == "rgb":
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+    elif order != "bgr":
+        raise ValueError(f"Unsupported color_order: {color_order!r}")
+
+    arr = crop.astype(np.float32) / 255.0
+    if image_mean is not None or image_std is not None:
+        mean = np.asarray(image_mean if image_mean is not None else [0.0, 0.0, 0.0], dtype=np.float32)
+        std = np.asarray(image_std if image_std is not None else [1.0, 1.0, 1.0], dtype=np.float32)
+        arr = (arr - mean.reshape(1, 1, 3)) / np.clip(std.reshape(1, 1, 3), 1e-8, None)
+    return torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0)
+
+
+def _prep_input(
+    frame: np.ndarray,
+    bbox_xyxy,
+    input_size,
+    pixel_std: float = 200.0,
+    *,
+    crop_transform: str = "affine",
+    color_order: str = "bgr",
+    image_mean: Optional[list[float]] = None,
+    image_std: Optional[list[float]] = None,
+):
     H, W = input_size
     x1, y1, x2, y2 = bbox_xyxy
+    if crop_transform == "direct_resize":
+        frame_h, frame_w = frame.shape[:2]
+        x1_i = int(max(0, min(frame_w - 1, round(float(x1)))))
+        y1_i = int(max(0, min(frame_h - 1, round(float(y1)))))
+        x2_i = int(max(x1_i + 1, min(frame_w, round(float(x2)))))
+        y2_i = int(max(y1_i + 1, min(frame_h, round(float(y2)))))
+        crop = frame[y1_i:y2_i, x1_i:x2_i]
+        if crop.size == 0:
+            x1_i, y1_i, x2_i, y2_i = 0, 0, frame_w, frame_h
+            crop = frame
+        crop = cv2.resize(crop, (W, H), interpolation=cv2.INTER_LINEAR)
+        x = _crop_to_tensor(crop, color_order=color_order, image_mean=image_mean, image_std=image_std)
+        return x, {"mode": "direct_resize", "bbox": np.array([x1_i, y1_i, x2_i, y2_i], dtype=np.float32)}
+
+    if crop_transform != "affine":
+        raise ValueError(f"Unknown crop_transform: {crop_transform!r}")
+
     center, scale = bbox_to_center_scale((x1, y1, x2, y2), aspect_ratio=W / H, pixel_std=pixel_std)
     M = get_affine_transform(np.asarray(center, dtype=np.float32),
                              np.asarray(scale, dtype=np.float32),
@@ -38,8 +94,38 @@ def _prep_input(frame: np.ndarray, bbox_xyxy, input_size, pixel_std: float = 200
                              output_size=(H, W),
                              pixel_std=pixel_std)
     crop = cv2.warpAffine(frame, M, (W, H), flags=cv2.INTER_LINEAR)
-    x = torch.from_numpy(crop.astype(np.float32).transpose(2, 0, 1) / 255.0).unsqueeze(0)
-    return x, center, scale
+    x = _crop_to_tensor(crop, color_order=color_order, image_mean=image_mean, image_std=image_std)
+    return x, {"mode": "affine", "center": center, "scale": scale}
+
+
+def _decode_heatmaps_to_bbox(heatmaps: torch.Tensor, bbox_xyxy, heatmap_size) -> np.ndarray:
+    """Decode heatmap argmaxes using the branch SimpleBaseline crop convention."""
+    hm = heatmaps.detach().cpu().numpy()
+    if hm.ndim == 4:
+        hm = hm[0]
+    num_joints, hm_h, hm_w = hm.shape
+    expected_h, expected_w = _size_tuple(heatmap_size, (hm_h, hm_w))
+    if (hm_h, hm_w) != (expected_h, expected_w):
+        raise ValueError(
+            f"heatmap output {(hm_h, hm_w)} does not match configured {(expected_h, expected_w)}"
+        )
+    x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+    crop_w = max(1.0, x2 - x1)
+    crop_h = max(1.0, y2 - y1)
+
+    flat = hm.reshape(num_joints, -1)
+    idx = flat.argmax(axis=1)
+    peak_vals = flat[np.arange(num_joints), idx].astype(np.float32)
+    max_peak = float(peak_vals.max()) if float(peak_vals.max()) > 0.0 else 1.0
+
+    kps = np.zeros((num_joints, 3), dtype=np.float32)
+    for j in range(num_joints):
+        hm_x = float(idx[j] % hm_w)
+        hm_y = float(idx[j] // hm_w)
+        kps[j, 0] = (hm_x / float(hm_w)) * crop_w + x1
+        kps[j, 1] = (hm_y / float(hm_h)) * crop_h + y1
+        kps[j, 2] = float(np.clip(peak_vals[j] / max_peak, 0.0, 1.0))
+    return kps
 
 
 def _resolve_device(device: Optional[str]) -> torch.device:
@@ -74,6 +160,13 @@ def run(
     model_cfg = load_yaml(model_config_path)
     if model_cfg.get("pretrained", False):
         raise SystemExit("pretrained=true is forbidden. See docs/project_decisions.md.")
+    model_inference_cfg = model_cfg.get("inference", {}) or {}
+    input_size = _size_tuple(model_inference_cfg.get("input_size"), input_size)
+    heatmap_size = _size_tuple(model_inference_cfg.get("heatmap_size"), heatmap_size)
+    crop_transform = str(model_inference_cfg.get("crop_transform", "affine")).lower()
+    color_order = str(model_inference_cfg.get("color_order", "bgr")).lower()
+    image_mean = model_inference_cfg.get("image_mean")
+    image_std = model_inference_cfg.get("image_std")
 
     device_t = _resolve_device(device)
     model = build_model(model_cfg).to(device_t).eval()
@@ -154,19 +247,30 @@ def run(
                     h, w = frame.shape[:2]
                     smoothed = np.array(MotionCropper._center_fallback(h, w), dtype=np.float32)
 
-            x, center, scale = _prep_input(frame, smoothed, input_size)
+            x, decode_info = _prep_input(
+                frame,
+                smoothed,
+                input_size,
+                crop_transform=crop_transform,
+                color_order=color_order,
+                image_mean=image_mean,
+                image_std=image_std,
+            )
             with torch.no_grad():
                 hm = model(x.to(device_t))
-            coords, vals = decode_heatmaps_to_image(
-                hm,
-                centers=np.asarray([center], dtype=np.float32),
-                scales=np.asarray([scale], dtype=np.float32),
-                input_size=input_size,
-                heatmap_size=heatmap_size,
-            )
-            # coords: (1, 17, 2); vals: (1, 17)
-            conf = vals[0].astype(np.float32)
-            kps = np.concatenate([coords[0].astype(np.float32), conf[:, None]], axis=-1)
+            if decode_info["mode"] == "direct_resize":
+                kps = _decode_heatmaps_to_bbox(hm, decode_info["bbox"], heatmap_size)
+            else:
+                coords, vals = decode_heatmaps_to_image(
+                    hm,
+                    centers=np.asarray([decode_info["center"]], dtype=np.float32),
+                    scales=np.asarray([decode_info["scale"]], dtype=np.float32),
+                    input_size=input_size,
+                    heatmap_size=heatmap_size,
+                )
+                # coords: (1, 17, 2); vals: (1, 17)
+                conf = vals[0].astype(np.float32)
+                kps = np.concatenate([coords[0].astype(np.float32), conf[:, None]], axis=-1)
             poses.append(kps)
             bboxes.append(np.asarray(smoothed, dtype=np.float32))
     finally:
@@ -190,6 +294,12 @@ def run(
                 "height": meta.height,
                 "crop_mode": crop_mode,
                 "crop": crop_meta,
+                "model_inference": {
+                    "crop_transform": crop_transform,
+                    "color_order": color_order,
+                    "image_mean": image_mean,
+                    "image_std": image_std,
+                },
             },
             indent=2,
         )

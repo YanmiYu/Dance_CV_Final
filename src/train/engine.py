@@ -187,6 +187,13 @@ def _load_state_from_internal_ckpt(model: nn.Module, path: str) -> None:
     state = torch.load(path, map_location="cpu")
     if isinstance(state, dict) and "model" in state:
         state = state["model"]
+    elif isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    if isinstance(state, dict):
+        state = {
+            (key.removeprefix("module.") if isinstance(key, str) else key): value
+            for key, value in state.items()
+        }
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
         print(f"[init_from] missing keys (ok if architecture differs slightly): {len(missing)}")

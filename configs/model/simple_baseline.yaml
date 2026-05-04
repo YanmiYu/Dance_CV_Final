@@ -23,3 +23,13 @@ head:
   deconv_kernels: [4, 4, 4]
   final_kernel: 1
   num_joints: 17
+
+# The checkpoint ported from simple-baseline-lynn was trained with direct
+# bbox-resize crops, RGB channel order, and ImageNet normalization.
+inference:
+  input_size: [256, 192]
+  heatmap_size: [64, 48]
+  crop_transform: direct_resize
+  color_order: rgb
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
