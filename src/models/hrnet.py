@@ -1,8 +1,9 @@
 """HRNet-W32 style backbone + pose head, implemented from scratch.
 
-Follows the HRNet paper's high-to-low + low-to-high fusion pattern but
-DOES NOT load any external pretrained weights. See
-``docs/project_decisions.md`` section 1.
+Follows the HRNet paper's high-to-low + low-to-high fusion pattern. By
+default the model is randomly initialized; ImageNet backbone weights may be
+loaded externally via ``src/models/hrnet_pretrained.py`` (head stays random).
+See ``docs/project_decisions.md`` section 1 (incl. 2026-05-04 revision).
 """
 from __future__ import annotations
 
@@ -145,7 +146,9 @@ class HRNetPose(nn.Module):
     def __init__(self, config: Dict) -> None:
         super().__init__()
         assert not config.get("pretrained", False), (
-            "HRNet must NOT load pretrained weights. See docs/project_decisions.md."
+            "HRNet must NOT load pretrained pose weights. See docs/project_decisions.md. "
+            "ImageNet backbone init is permitted via pretrained_backbone_path "
+            "(loaded by src/models/hrnet_pretrained.py)."
         )
 
         stem_c = int(config.get("stem", {}).get("out_channels", 64))

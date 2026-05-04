@@ -1,8 +1,9 @@
 decisions_ref: docs/project_decisions.md
 
 # Use this only after human-labeled custom_dance JSONL files exist.
-# The model is still HRNet-W32 from random initialization; custom_dance labels
-# must come from manual annotation, not detector or pose pseudo-labels.
+# The model is HRNet-W32 with the same ImageNet backbone init as
+# configs/train/train_hrnet.yaml; custom_dance labels must come from manual
+# annotation, not detector or pose pseudo-labels.
 
 stage: hrnet_aist_custom_dance
 data_config: configs/data/pose_train.yaml

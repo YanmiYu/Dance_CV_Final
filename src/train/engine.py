@@ -70,6 +70,11 @@ def build_model(model_config: Dict) -> nn.Module:
         raise ValueError(
             "pretrained=true is forbidden. See docs/project_decisions.md section 1."
         )
+    if model_config.get("pretrained_backbone_path") and name != "hrnet_w32":
+        raise ValueError(
+            f"pretrained_backbone_path is only supported for hrnet_w32, not {name!r}. "
+            "See docs/project_decisions.md section 1 (2026-05-04 revision)."
+        )
     if name == "simple_baseline":
         from src.models.simple_baseline import SimpleBaselinePose
         return SimpleBaselinePose(model_config)
@@ -79,16 +84,56 @@ def build_model(model_config: Dict) -> nn.Module:
     raise ValueError(f"Unknown model name: {name!r}")
 
 
+def _build_param_groups(model: nn.Module, groups_cfg: Dict) -> list[Dict]:
+    """Resolve named parameter groups to lists of `{params, lr}` dicts.
+
+    `groups_cfg` is `{group_name: {"lr": float, "modules": [str, ...]}, ...}`.
+    Each module name is resolved via `getattr(model, name)`. Asserts every
+    parameter is covered exactly once.
+    """
+    groups: list[Dict] = []
+    seen_ids: set[int] = set()
+    total_assigned = 0
+    for gname, gcfg in groups_cfg.items():
+        params: list[torch.nn.Parameter] = []
+        for mod_name in gcfg["modules"]:
+            mod = getattr(model, mod_name)
+            for p in mod.parameters():
+                if id(p) in seen_ids:
+                    raise ValueError(
+                        f"Parameter from module {mod_name!r} (group {gname!r}) is assigned to two groups."
+                    )
+                seen_ids.add(id(p))
+                params.append(p)
+                total_assigned += p.numel()
+        groups.append({"params": params, "lr": float(gcfg["lr"]), "name": gname})
+
+    total_model = sum(p.numel() for p in model.parameters())
+    if total_assigned != total_model:
+        raise ValueError(
+            f"param_groups cover {total_assigned} params but model has {total_model}. "
+            "Every parameter must belong to exactly one group."
+        )
+    return groups
+
+
 def build_optimizer(model: nn.Module, optim_cfg: Dict) -> torch.optim.Optimizer:
     name = optim_cfg.get("name", "adamw").lower()
-    lr = float(optim_cfg.get("lr", 3e-4))
     wd = float(optim_cfg.get("weight_decay", 1e-4))
+
+    groups_cfg = optim_cfg.get("param_groups")
+    if groups_cfg:
+        params = _build_param_groups(model, groups_cfg)
+    else:
+        lr = float(optim_cfg.get("lr", 3e-4))
+        params = [{"params": list(model.parameters()), "lr": lr}]
+
     if name == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+        return torch.optim.AdamW(params, weight_decay=wd)
     if name == "adam":
-        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+        return torch.optim.Adam(params, weight_decay=wd)
     if name == "sgd":
-        return torch.optim.SGD(model.parameters(), lr=lr, weight_decay=wd, momentum=0.9)
+        return torch.optim.SGD(params, weight_decay=wd, momentum=0.9)
     raise ValueError(f"Unknown optimizer: {name!r}")
 
 
@@ -98,18 +143,22 @@ def build_scheduler(optim, sched_cfg: Dict, total_epochs: int):
     min_lr = float(sched_cfg.get("min_lr", 1e-6))
     base_lrs = [g["lr"] for g in optim.param_groups]
 
-    def _lr_lambda(epoch: int) -> float:
-        if epoch < warmup:
-            return (epoch + 1) / max(warmup, 1)
-        if name == "cosine":
-            progress = (epoch - warmup) / max(total_epochs - warmup, 1)
-            scale = 0.5 * (1 + math.cos(math.pi * progress))
-            return max(scale + (min_lr / base_lrs[0]) * (1 - scale), min_lr / base_lrs[0])
-        if name == "constant":
+    def _make_lambda(base_lr: float):
+        floor = min_lr / base_lr
+        def _lr_lambda(epoch: int) -> float:
+            if epoch < warmup:
+                return (epoch + 1) / max(warmup, 1)
+            if name == "cosine":
+                progress = min((epoch - warmup) / max(total_epochs - warmup, 1), 1.0)
+                scale = 0.5 * (1 + math.cos(math.pi * progress))
+                return max(scale + floor * (1 - scale), floor)
+            if name == "constant":
+                return 1.0
             return 1.0
-        return 1.0
+        return _lr_lambda
 
-    return torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=_lr_lambda)
+    lambdas = [_make_lambda(b) for b in base_lrs]
+    return torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=lambdas)
 
 
 @dataclass
@@ -156,6 +205,10 @@ def make_train_ctx(
 
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(model_cfg).to(device)
+
+    if (backbone_path := model_cfg.get("pretrained_backbone_path")):
+        from src.models.hrnet_pretrained import load_hrnet_imagenet_backbone
+        load_hrnet_imagenet_backbone(model, backbone_path)
 
     if (init_from := train_cfg.get("init_from")):
         _load_state_from_internal_ckpt(model, init_from)

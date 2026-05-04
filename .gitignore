@@ -29,6 +29,8 @@ data/keypoints2d/*
 !data/keypoints2d/.gitkeep
 data/manifests/*.parquet
 data/manifests/*.jsonl
+data/external/pretrained/*
+!data/external/pretrained/.gitkeep
 
 # keep the AIST URL csv
 !data/raw_urls/*.csv

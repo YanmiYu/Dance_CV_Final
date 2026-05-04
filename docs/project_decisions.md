@@ -19,6 +19,16 @@ Enforcement: model factory functions in `src/models/` MUST NOT load weights
 from any external source. Loading state dicts is only permitted from our own
 training checkpoints saved under `data/processed/`.
 
+Revision (2026-05-04): §1 amended for HRNet only. ImageNet classification
+weights for the HRNet **backbone** (stem + stage1..stage4 + transitions) are
+permitted as initialization. The **pose head remains randomly initialized**
+(Kaiming). All other constraints stand: no pretrained pose/keypoint weights,
+no detection weights as init, no SSL foundation checkpoints. Whitelisted
+file: `hrnetv2_w32_imagenet_pretrained.pth` (MSRA release), stored at
+`data/external/pretrained/hrnetv2_w32_imagenet.pth`, loaded only by
+`src/models/hrnet_pretrained.py` (backbone-only, `strict=False`). `init_from`
+continues to require `data/processed/`.
+
 ## 2. Task definition
 
 - Single-person 2D pose extraction only.

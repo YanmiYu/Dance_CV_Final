@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Push raw videos and AIST++ 2D keypoints from this laptop to Oscar.
+# Push raw videos, AIST++ 2D keypoints, and external checkpoints from this
+# laptop to Oscar.
 #
 # Fixes three problems with the naive `rsync -av data/... user@host:~/scratch/.../data/...`:
 #   1) The remote parent directory does not exist yet, and Apple's rsync 2.6.9 does
@@ -14,6 +15,7 @@
 #   OSCAR_USER         (default: mwang264)
 #   OSCAR_HOST         (default: ssh.ccv.brown.edu)
 #   OSCAR_REMOTE_ROOT  (default: ~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice)
+#   SKIP_HRNET_CKPT    (default: 0; set to 1 only for non-HRNet runs)
 #
 # Usage:
 #   bash scripts/push_to_oscar.sh
@@ -22,19 +24,28 @@ set -euo pipefail
 OSCAR_USER="${OSCAR_USER:-mwang264}"
 OSCAR_HOST="${OSCAR_HOST:-ssh.ccv.brown.edu}"
 OSCAR_REMOTE_ROOT="${OSCAR_REMOTE_ROOT:-~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice}"
+SKIP_HRNET_CKPT="${SKIP_HRNET_CKPT:-0}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 VIDEOS_SRC="data/raw_videos"
 KPS_SRC="data/labels/aistpp/keypoints2d_raw"
+PRETRAINED_SRC="data/external/pretrained"
+HRNET_CKPT="$PRETRAINED_SRC/hrnetv2_w32_imagenet.pth"
 
-for src in "$VIDEOS_SRC" "$KPS_SRC"; do
+for src in "$VIDEOS_SRC" "$KPS_SRC" "$PRETRAINED_SRC"; do
   if [[ ! -d "$src" ]]; then
     echo "ERROR: local source directory missing: $src" >&2
     exit 1
   fi
 done
+if [[ "$SKIP_HRNET_CKPT" != "1" && ! -f "$HRNET_CKPT" ]]; then
+  echo "ERROR: HRNet ImageNet checkpoint is missing: $HRNET_CKPT" >&2
+  echo "       Run: python3 scripts/download_hrnet_imagenet.py" >&2
+  echo "       For non-HRNet runs only, bypass with: SKIP_HRNET_CKPT=1 bash scripts/push_to_oscar.sh" >&2
+  exit 1
+fi
 
 # One shared ControlMaster socket => one Duo prompt for the whole script.
 # macOS caps Unix-socket paths at 104 bytes, so we use ~/.ssh with the short
@@ -62,10 +73,11 @@ ssh "${SSH_OPTS[@]}" "$OSCAR_USER@$OSCAR_HOST" \
 
 REMOTE_VIDEOS="$OSCAR_REMOTE_ROOT/data/raw_videos"
 REMOTE_KPS="$OSCAR_REMOTE_ROOT/data/labels/aistpp/keypoints2d_raw"
+REMOTE_PRETRAINED="$OSCAR_REMOTE_ROOT/data/external/pretrained"
 
 echo "==> Creating remote directories on Oscar"
 ssh "${SSH_OPTS[@]}" "$OSCAR_USER@$OSCAR_HOST" \
-  "mkdir -p $REMOTE_VIDEOS $REMOTE_KPS && echo 'remote dirs ready'"
+  "mkdir -p $REMOTE_VIDEOS $REMOTE_KPS $REMOTE_PRETRAINED && echo 'remote dirs ready'"
 
 # -a  archive (recursive + preserve perms/times/links)
 # -v  verbose
@@ -85,11 +97,23 @@ echo "==> Transferring AIST++ 2D keypoints ($(du -sh "$KPS_SRC" | awk '{print $1
 rsync "${RSYNC_OPTS[@]}" "$KPS_SRC/" \
   "$OSCAR_USER@$OSCAR_HOST:$REMOTE_KPS/"
 
+if [[ "$SKIP_HRNET_CKPT" != "1" ]]; then
+  echo "==> Transferring external pretrained checkpoints ($(du -sh "$PRETRAINED_SRC" | awk '{print $1}'))"
+  rsync "${RSYNC_OPTS[@]}" "$PRETRAINED_SRC/" \
+    "$OSCAR_USER@$OSCAR_HOST:$REMOTE_PRETRAINED/"
+else
+  echo "==> Skipping HRNet checkpoint transfer (SKIP_HRNET_CKPT=1)"
+fi
+
 echo "==> Verifying remote file counts"
 ssh "${SSH_OPTS[@]}" "$OSCAR_USER@$OSCAR_HOST" bash -s <<EOF
 set -e
 echo "videos:    \$(ls -1 $REMOTE_VIDEOS | wc -l) files, \$(du -sh $REMOTE_VIDEOS | awk '{print \$1}')"
 echo "keypoints: \$(ls -1 $REMOTE_KPS    | wc -l) files, \$(du -sh $REMOTE_KPS    | awk '{print \$1}')"
+if [[ "$SKIP_HRNET_CKPT" != "1" ]]; then
+  test -s $REMOTE_PRETRAINED/hrnetv2_w32_imagenet.pth
+  echo "hrnet ckpt: $REMOTE_PRETRAINED/hrnetv2_w32_imagenet.pth, \$(du -sh $REMOTE_PRETRAINED/hrnetv2_w32_imagenet.pth | awk '{print \$1}')"
+fi
 EOF
 
 echo "==> Done."

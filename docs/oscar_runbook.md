@@ -26,10 +26,11 @@ git clone <your repo URL> CV_Tool_for_Dance_Choreography_Practice
 cd CV_Tool_for_Dance_Choreography_Practice
 ```
 
-Then upload the large inputs from your laptop. The helper script handles three
-things you'd otherwise hit by hand: it pre-creates the remote directories,
-multiplexes SSH so you Duo-2FA only once, and uses `--partial` so a dropped
-transfer resumes on re-run.
+Then upload the large inputs from your laptop. The helper script transfers raw
+videos, AIST++ keypoints, and the HRNet ImageNet checkpoint. It also handles
+three things you'd otherwise hit by hand: it pre-creates the remote
+directories, multiplexes SSH so you Duo-2FA only once, and uses `--partial` so
+a dropped transfer resumes on re-run.
 
 ```bash
 # from the repo root on your laptop
@@ -39,6 +40,8 @@ bash scripts/push_to_oscar.sh
 Override the defaults (user `mwang264`, host `ssh.ccv.brown.edu`, remote root
 `~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice`) via env vars if
 needed, e.g. `OSCAR_USER=myuser bash scripts/push_to_oscar.sh`.
+For non-HRNet runs only, `SKIP_HRNET_CKPT=1` bypasses the checkpoint
+requirement.
 
 If you'd rather run rsync directly, first create the remote parents over SSH,
 then rsync (Apple's rsync 2.6.9 does not support `--mkpath`, which is why the
@@ -47,13 +50,23 @@ bare `rsync -av --mkpath ...` form fails on macOS):
 ```bash
 ssh <user>@ssh.ccv.brown.edu \
     "mkdir -p ~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/raw_videos \
-              ~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/labels/aistpp/keypoints2d_raw"
+              ~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/labels/aistpp/keypoints2d_raw \
+              ~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/external/pretrained"
 
 rsync -av --progress --partial data/raw_videos/ \
     <user>@ssh.ccv.brown.edu:~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/raw_videos/
 
 rsync -av --progress --partial data/labels/aistpp/keypoints2d_raw/ \
     <user>@ssh.ccv.brown.edu:~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/labels/aistpp/keypoints2d_raw/
+
+rsync -av --progress --partial data/external/pretrained/ \
+    <user>@ssh.ccv.brown.edu:~/scratch/projects/CV_Tool_for_Dance_Choreography_Practice/data/external/pretrained/
+```
+
+If `data/external/pretrained/hrnetv2_w32_imagenet.pth` is missing locally, run:
+
+```bash
+python3 scripts/download_hrnet_imagenet.py
 ```
 
 ## 2. One-time environment setup
