@@ -1,0 +1,133 @@
+{
+  "overall_score": 80.43,
+  "intervals": [
+    {
+      "start_s": 0.53,
+      "end_s": 1.13,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.3423
+    },
+    {
+      "start_s": 3.73,
+      "end_s": 4.33,
+      "part": "LEFT_LEG",
+      "mean_error": 0.2785
+    },
+    {
+      "start_s": 4.8,
+      "end_s": 5.33,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.506
+    },
+    {
+      "start_s": 4.93,
+      "end_s": 5.47,
+      "part": "LEFT_ARM",
+      "mean_error": 0.341
+    },
+    {
+      "start_s": 5.6,
+      "end_s": 6.13,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3606
+    },
+    {
+      "start_s": 7.6,
+      "end_s": 8.27,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.4581
+    },
+    {
+      "start_s": 7.67,
+      "end_s": 8.2,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3099
+    },
+    {
+      "start_s": 7.67,
+      "end_s": 8.27,
+      "part": "RIGHT_LEG",
+      "mean_error": 0.2774
+    },
+    {
+      "start_s": 8.4,
+      "end_s": 9.33,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3754
+    },
+    {
+      "start_s": 8.6,
+      "end_s": 9.07,
+      "part": "HEAD",
+      "mean_error": 0.2958
+    },
+    {
+      "start_s": 8.67,
+      "end_s": 9.4,
+      "part": "RIGHT_LEG",
+      "mean_error": 0.346
+    },
+    {
+      "start_s": 8.8,
+      "end_s": 9.2,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.3532
+    },
+    {
+      "start_s": 9.6,
+      "end_s": 10.0,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.3198
+    },
+    {
+      "start_s": 10.4,
+      "end_s": 11.67,
+      "part": "LEFT_ARM",
+      "mean_error": 0.2948
+    },
+    {
+      "start_s": 10.4,
+      "end_s": 10.73,
+      "part": "LEFT_LEG",
+      "mean_error": 0.3469
+    },
+    {
+      "start_s": 10.4,
+      "end_s": 11.07,
+      "part": "HEAD",
+      "mean_error": 0.315
+    },
+    {
+      "start_s": 10.73,
+      "end_s": 11.07,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.4058
+    },
+    {
+      "start_s": 11.4,
+      "end_s": 11.87,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.3532
+    }
+  ],
+  "feedback": [
+    "At 0.5 s \u2013 1.1 s your Right Arm is moderately off (0.6 s window).",
+    "At 3.7 s \u2013 4.3 s your Left Leg is moderately off (0.6 s window).",
+    "At 4.8 s \u2013 5.3 s your Right Arm is significantly off (0.5 s window).",
+    "At 4.9 s \u2013 5.5 s your Left Arm is moderately off (0.5 s window).",
+    "At 5.6 s \u2013 6.1 s your Left Arm is significantly off (0.5 s window).",
+    "At 7.6 s \u2013 8.3 s your Right Arm is significantly off (0.7 s window).",
+    "At 7.7 s \u2013 8.2 s your Left Arm is moderately off (0.5 s window).",
+    "At 7.7 s \u2013 8.3 s your Right Leg is moderately off (0.6 s window).",
+    "At 8.4 s \u2013 9.3 s your Left Arm is significantly off (0.9 s window).",
+    "At 8.6 s \u2013 9.1 s your Head is moderately off (0.5 s window).",
+    "At 8.7 s \u2013 9.4 s your Right Leg is moderately off (0.7 s window).",
+    "At 8.8 s \u2013 9.2 s your Right Arm is significantly off (0.4 s window).",
+    "At 9.6 s \u2013 10.0 s your Right Arm is moderately off (0.4 s window).",
+    "At 10.4 s \u2013 11.7 s your Left Arm is moderately off (1.3 s window).",
+    "At 10.4 s \u2013 10.7 s your Left Leg is moderately off (0.3 s window).",
+    "At 10.4 s \u2013 11.1 s your Head is moderately off (0.7 s window).",
+    "At 10.7 s \u2013 11.1 s your Right Arm is significantly off (0.3 s window).",
+    "At 11.4 s \u2013 11.9 s your Right Arm is significantly off (0.5 s window)."
+  ]
+}

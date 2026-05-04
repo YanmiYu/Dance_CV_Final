@@ -1,0 +1,91 @@
+{
+  "overall_score": 83.82,
+  "intervals": [
+    {
+      "start_s": 0.27,
+      "end_s": 0.73,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.4044
+    },
+    {
+      "start_s": 1.0,
+      "end_s": 1.47,
+      "part": "LEFT_ARM",
+      "mean_error": 0.4559
+    },
+    {
+      "start_s": 3.53,
+      "end_s": 3.93,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3016
+    },
+    {
+      "start_s": 4.07,
+      "end_s": 4.47,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3284
+    },
+    {
+      "start_s": 4.67,
+      "end_s": 5.0,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3653
+    },
+    {
+      "start_s": 4.73,
+      "end_s": 5.07,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.3411
+    },
+    {
+      "start_s": 6.73,
+      "end_s": 7.13,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3156
+    },
+    {
+      "start_s": 7.67,
+      "end_s": 8.27,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3757
+    },
+    {
+      "start_s": 7.67,
+      "end_s": 8.07,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.4994
+    },
+    {
+      "start_s": 10.6,
+      "end_s": 11.07,
+      "part": "LEFT_ARM",
+      "mean_error": 0.4223
+    },
+    {
+      "start_s": 10.67,
+      "end_s": 11.07,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.4968
+    },
+    {
+      "start_s": 11.4,
+      "end_s": 11.87,
+      "part": "RIGHT_LEG",
+      "mean_error": 0.2976
+    }
+  ],
+  "feedback": [
+    "At 0.3 s \u2013 0.7 s your Right Arm is significantly off (0.5 s window).",
+    "At 1.0 s \u2013 1.5 s your Left Arm is significantly off (0.5 s window).",
+    "At 3.5 s \u2013 3.9 s your Left Arm is moderately off (0.4 s window).",
+    "At 4.1 s \u2013 4.5 s your Left Arm is moderately off (0.4 s window).",
+    "At 4.7 s \u2013 5.0 s your Left Arm is significantly off (0.3 s window).",
+    "At 4.7 s \u2013 5.1 s your Right Arm is moderately off (0.3 s window).",
+    "At 6.7 s \u2013 7.1 s your Left Arm is moderately off (0.4 s window).",
+    "At 7.7 s \u2013 8.3 s your Left Arm is significantly off (0.6 s window).",
+    "At 7.7 s \u2013 8.1 s your Right Arm is significantly off (0.4 s window).",
+    "At 10.6 s \u2013 11.1 s your Left Arm is significantly off (0.5 s window).",
+    "At 10.7 s \u2013 11.1 s your Right Arm is significantly off (0.4 s window).",
+    "At 11.4 s \u2013 11.9 s your Right Leg is moderately off (0.5 s window)."
+  ]
+}

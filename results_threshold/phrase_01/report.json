@@ -1,0 +1,35 @@
+{
+  "overall_score": 86.04,
+  "intervals": [
+    {
+      "start_s": 1.0,
+      "end_s": 1.4,
+      "part": "HEAD",
+      "mean_error": 0.3241
+    },
+    {
+      "start_s": 3.53,
+      "end_s": 4.2,
+      "part": "LEFT_ARM",
+      "mean_error": 0.3107
+    },
+    {
+      "start_s": 4.0,
+      "end_s": 4.6,
+      "part": "HEAD",
+      "mean_error": 0.345
+    },
+    {
+      "start_s": 10.0,
+      "end_s": 10.47,
+      "part": "HEAD",
+      "mean_error": 0.3316
+    }
+  ],
+  "feedback": [
+    "At 1.0 s \u2013 1.4 s your Head is moderately off (0.4 s window).",
+    "At 3.5 s \u2013 4.2 s your Left Arm is moderately off (0.7 s window).",
+    "At 4.0 s \u2013 4.6 s your Head is moderately off (0.6 s window).",
+    "At 10.0 s \u2013 10.5 s your Head is moderately off (0.5 s window)."
+  ]
+}
