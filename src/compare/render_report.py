@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -342,11 +343,38 @@ def _render_side_by_side(
         write_video(out_path, iter(frames), fps=out_fps, size=(w, h))
 
 
+def _load_poses_from_pkl(pkl_path: str | Path, video_path: str | Path) -> Tuple[np.ndarray, dict]:
+    """Load ``(T, 17, 3)`` poses from an AIST++ keypoint PKL.
+
+    Returns ``(poses, meta)`` where ``meta`` mirrors the ``meta.json`` written
+    by the standard pose-inference cache (``fps``, ``num_frames``). ``fps`` is
+    probed from the matching video file.
+    """
+    with open(pkl_path, "rb") as f:
+        data = pickle.load(f)
+    kp = data["keypoints2d"] if isinstance(data, dict) and "keypoints2d" in data else data
+    arr = np.asarray(kp)
+    if arr.ndim != 3 or arr.shape[1:] != (17, 3):
+        raise ValueError(
+            f"{pkl_path}: expected keypoints2d shape (T, 17, 3), got {arr.shape}. "
+            "Multi-camera 'cAll' files are not supported here -- pass a single-"
+            "camera PKL or pre-slice it before running render_report."
+        )
+    arr = arr.astype(np.float32, copy=False)
+    if not np.isfinite(arr).all():
+        arr = np.where(np.isfinite(arr), arr, 0.0).astype(np.float32, copy=False)
+
+    probed = ffprobe_meta(str(video_path))
+    probed_fps = getattr(probed, "fps", None)
+    fps = float(probed_fps) if probed_fps else 30.0
+    return arr, {"fps": fps, "num_frames": int(arr.shape[0])}
+
+
 def run(
     benchmark_video: str,
     user_video: str,
-    model_config: str,
-    ckpt: str,
+    model_config: Optional[str],
+    ckpt: Optional[str],
     compare_config: str,
     out_root: str,
     render_video: bool = True,
@@ -356,6 +384,8 @@ def run(
     gnn_checkpoint: Optional[str] = None,
     gnn_device: str = "auto",
     embedding_score_weight: Optional[float] = None,
+    bench_poses_pkl: Optional[str] = None,
+    user_poses_pkl: Optional[str] = None,
 ) -> Path:
     out_root = ensure_dir(out_root)
     cfg = load_yaml(compare_config)
@@ -364,22 +394,33 @@ def run(
     if alignment_method == "gnn_embedding" and not gnn_checkpoint:
         raise ValueError("--gnn-checkpoint is required when --alignment-method gnn_embedding")
 
-    bench_pred = _run_pose_if_needed(
-        benchmark_video, model_config, ckpt, out_root / "benchmark_pose",
-        crop_mode=crop_mode,
-        detector_kwargs=detector_kwargs,
-    )
-    user_pred = _run_pose_if_needed(
-        user_video, model_config, ckpt, out_root / "user_pose",
-        crop_mode=crop_mode,
-        detector_kwargs=detector_kwargs,
-    )
+    use_pkl = bool(bench_poses_pkl) and bool(user_poses_pkl)
+    if not use_pkl and (not model_config or not ckpt):
+        raise ValueError(
+            "Either provide both pose PKLs, or provide --model-config and --ckpt "
+            "to run pose inference."
+        )
 
-    bench_raw = np.load(bench_pred / "poses.npy")
-    user_raw = np.load(user_pred / "poses.npy")
+    if use_pkl:
+        bench_raw, bench_meta = _load_poses_from_pkl(bench_poses_pkl, benchmark_video)
+        user_raw, user_meta = _load_poses_from_pkl(user_poses_pkl, user_video)
+    else:
+        bench_pred = _run_pose_if_needed(
+            benchmark_video, model_config, ckpt, out_root / "benchmark_pose",
+            crop_mode=crop_mode,
+            detector_kwargs=detector_kwargs,
+        )
+        user_pred = _run_pose_if_needed(
+            user_video, model_config, ckpt, out_root / "user_pose",
+            crop_mode=crop_mode,
+            detector_kwargs=detector_kwargs,
+        )
 
-    bench_meta = json.loads((bench_pred / "meta.json").read_text())
-    user_meta = json.loads((user_pred / "meta.json").read_text())
+        bench_raw = np.load(bench_pred / "poses.npy")
+        user_raw = np.load(user_pred / "poses.npy")
+
+        bench_meta = json.loads((bench_pred / "meta.json").read_text())
+        user_meta = json.loads((user_pred / "meta.json").read_text())
     fps = float(bench_meta.get("fps") or 30.0)
     # #region agent log
     _dbg_log(
@@ -519,12 +560,19 @@ def run(
     return out_root
 
 
-def _main() -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="End-to-end comparison report from two videos.")
     p.add_argument("--benchmark", required=True)
     p.add_argument("--user", required=True)
-    p.add_argument("--model-config", required=True)
-    p.add_argument("--ckpt", required=True)
+    # --model-config / --ckpt are only required when running pose inference.
+    # If --bench-poses-pkl AND --user-poses-pkl are both provided, inference
+    # is skipped and these may be omitted. See _validate_cli_args below.
+    p.add_argument("--model-config", default=None)
+    p.add_argument("--ckpt", default=None)
+    p.add_argument("--bench-poses-pkl", default=None,
+                   help="Path to a precomputed (T, 17, 3) keypoints2d PKL for the benchmark video.")
+    p.add_argument("--user-poses-pkl", default=None,
+                   help="Path to a precomputed (T, 17, 3) keypoints2d PKL for the user video.")
     p.add_argument("--compare-config", default="configs/data/compare.yaml")
     p.add_argument("--out", default="data/reports/run_latest")
     p.add_argument("--no-video", action="store_true")
@@ -540,9 +588,43 @@ def _main() -> None:
     p.add_argument("--gnn-checkpoint", default=None)
     p.add_argument("--gnn-device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
     p.add_argument("--embedding-score-weight", type=float, default=None)
-    args = p.parse_args()
+    return p
+
+
+def _validate_cli_args(args: argparse.Namespace) -> Optional[str]:
+    """Validate CLI args. Returns an error message on failure, ``None`` on success.
+
+    Rules:
+      * ``--gnn-checkpoint`` is required when ``--alignment-method gnn_embedding``.
+      * If BOTH ``--bench-poses-pkl`` and ``--user-poses-pkl`` are provided,
+        pose inference is skipped and ``--model-config`` / ``--ckpt`` may be
+        omitted.
+      * Otherwise (any pose PKL missing), ``--model-config`` and ``--ckpt``
+        are required because the script must run pose inference on the video.
+    """
     if args.alignment_method == "gnn_embedding" and not args.gnn_checkpoint:
-        p.error("--gnn-checkpoint is required when --alignment-method gnn_embedding")
+        return "--gnn-checkpoint is required when --alignment-method gnn_embedding"
+    have_any_pkl = bool(args.bench_poses_pkl) or bool(args.user_poses_pkl)
+    have_both_pkls = bool(args.bench_poses_pkl) and bool(args.user_poses_pkl)
+    if have_any_pkl and not have_both_pkls:
+        return (
+            "Either provide both pose PKLs, or provide --model-config and "
+            "--ckpt to run pose inference."
+        )
+    if not have_both_pkls and (not args.model_config or not args.ckpt):
+        return (
+            "Either provide both pose PKLs, or provide --model-config and "
+            "--ckpt to run pose inference."
+        )
+    return None
+
+
+def _main() -> None:
+    p = _build_arg_parser()
+    args = p.parse_args()
+    err = _validate_cli_args(args)
+    if err:
+        p.error(err)
     detector_kwargs = {
         "detector_sample_stride": args.detector_sample_stride,
         "detector_max_samples": args.detector_max_samples,
@@ -563,6 +645,8 @@ def _main() -> None:
         gnn_checkpoint=args.gnn_checkpoint,
         gnn_device=args.gnn_device,
         embedding_score_weight=args.embedding_score_weight,
+        bench_poses_pkl=args.bench_poses_pkl,
+        user_poses_pkl=args.user_poses_pkl,
     )
     print(f"report written to {out}")
 
