@@ -48,9 +48,21 @@ _TRANS_MAP: Dict[str, str] = {
 }
 
 # Compiled regexes for the body stages.
+# Official transition branches newly introduced at each stage are nested as
+# transitionN.<branch>.<downsample_step>.<conv_or_bn>.<param>. Our local
+# transition stores the single downsample step as a flat Sequential.
+_RE_TRANSITION_NESTED = re.compile(
+    r"^transition([123])\.(\d+)\.(\d+)\.(\d+)\.(.+)$"
+)
 # Official: stage{N}.{m}.branches.{i}.{j}.{...}
 # Local:    stage{N}.modules_list.{m}.branches.{i}.blocks.{j}.{...}
 _RE_STAGE_BRANCHES = re.compile(r"^stage([234])\.(\d+)\.branches\.(\d+)\.(\d+)\.(.+)$")
+# Official downsample fuse paths are nested as
+# fuse_layers.<dst>.<src>.<downsample_step>.<conv_or_bn>.<param>. Our local
+# fuse path is a flat Sequential with ReLUs between downsample steps.
+_RE_STAGE_FUSE_DOWNSAMPLE = re.compile(
+    r"^stage([234])\.(\d+)\.fuse_layers\.(\d+)\.(\d+)\.(\d+)\.(\d+)\.(.+)$"
+)
 # Official: stage{N}.{m}.fuse_layers.{i}.{j}.{...}
 # Local:    stage{N}.modules_list.{m}.fuse.fuse_layers.{i}.{j}.{...}
 _RE_STAGE_FUSE = re.compile(r"^stage([234])\.(\d+)\.fuse_layers\.(\d+)\.(\d+)\.(.+)$")
@@ -76,12 +88,35 @@ def _remap_key(key: str) -> str | None:
         return f"stage1.{k}.{suffix}"
 
     # Transitions
+    if (m := _RE_TRANSITION_NESTED.match(key)) is not None:
+        n = m.group(1)
+        branch = m.group(2)
+        step = int(m.group(3))
+        layer = int(m.group(4))
+        suffix = m.group(5)
+        trans_name = {"1": "trans_12", "2": "trans_23", "3": "trans_34"}[n]
+        local_layer = step * 3 + layer
+        return f"{trans_name}.transitions.{branch}.{local_layer}.{suffix}"
+
     for off_pref, loc_pref in _TRANS_MAP.items():
         if key.startswith(off_pref):
             return loc_pref + key[len(off_pref):]
 
     # Stage 2/3/4 fuse_layers (must be checked BEFORE branches because both
     # share the stage{N}.{m}. prefix).
+    if (m := _RE_STAGE_FUSE_DOWNSAMPLE.match(key)) is not None:
+        n, mod, i, j, step, layer, suffix = (
+            m.group(1),
+            m.group(2),
+            m.group(3),
+            m.group(4),
+            int(m.group(5)),
+            int(m.group(6)),
+            m.group(7),
+        )
+        local_layer = step * 3 + layer
+        return f"stage{n}.modules_list.{mod}.fuse.fuse_layers.{i}.{j}.{local_layer}.{suffix}"
+
     if (m := _RE_STAGE_FUSE.match(key)) is not None:
         n, mod, i, j, suffix = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
         return f"stage{n}.modules_list.{mod}.fuse.fuse_layers.{i}.{j}.{suffix}"
@@ -112,6 +147,31 @@ def _build_remapped_state_dict(
             continue
         remapped[new_k] = v
     return remapped, dropped, unmapped
+
+
+def _is_unused_final_stage_fuse_key(model: nn.Module, key: str) -> bool:
+    """Return True for final-stage fuse rows that HRNetPose never consumes.
+
+    The MSRA ImageNet classification checkpoint was trained with the final
+    stage's last module emitting only branch 0. Our pose forward also feeds only
+    branch 0 to the head, so missing fuse rows for branches 1..N in that last
+    module are unused parameters rather than a required initialization gap.
+    """
+    stage4 = getattr(model, "stage4", None)
+    modules_list = getattr(stage4, "modules_list", None)
+    try:
+        final_idx = len(modules_list) - 1
+    except TypeError:
+        return False
+    if final_idx < 0:
+        return False
+
+    prefix = f"stage4.modules_list.{final_idx}.fuse.fuse_layers."
+    if not key.startswith(prefix):
+        return False
+
+    row = key[len(prefix):].split(".", 1)[0]
+    return row.isdigit() and int(row) > 0
 
 
 def _resolve_checkpoint_path(ckpt_path: str | Path) -> Path:
@@ -146,7 +206,10 @@ def load_hrnet_imagenet_backbone(model: nn.Module, ckpt_path: str) -> Dict[str, 
     Returns a small summary dict (counts) for logging/tests.
     """
     resolved_ckpt_path = _resolve_checkpoint_path(ckpt_path)
-    raw = torch.load(resolved_ckpt_path, map_location="cpu")
+    try:
+        raw = torch.load(resolved_ckpt_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        raw = torch.load(resolved_ckpt_path, map_location="cpu")
     if isinstance(raw, dict) and "state_dict" in raw:
         official = raw["state_dict"]
     elif isinstance(raw, dict) and "model" in raw and isinstance(raw["model"], dict):
@@ -162,7 +225,11 @@ def load_hrnet_imagenet_backbone(model: nn.Module, ckpt_path: str) -> Dict[str, 
 
     missing, unexpected = model.load_state_dict(remapped, strict=False)
 
-    backbone_missing = [k for k in missing if not k.startswith("head.")]
+    backbone_missing_all = [k for k in missing if not k.startswith("head.")]
+    tolerated_missing = [
+        k for k in backbone_missing_all if _is_unused_final_stage_fuse_key(model, k)
+    ]
+    backbone_missing = [k for k in backbone_missing_all if k not in tolerated_missing]
     if len(backbone_missing) > 5:
         sample = "\n  ".join(backbone_missing[:20])
         raise RuntimeError(
@@ -176,6 +243,7 @@ def load_hrnet_imagenet_backbone(model: nn.Module, ckpt_path: str) -> Dict[str, 
         "unmapped_official": len(unmapped),
         "missing_total": len(missing),
         "missing_backbone": len(backbone_missing),
+        "missing_unused_stage4_fuse": len(tolerated_missing),
         "unexpected": len(unexpected),
     }
     print(
@@ -184,6 +252,7 @@ def load_hrnet_imagenet_backbone(model: nn.Module, ckpt_path: str) -> Dict[str, 
         f"unmapped_official={summary['unmapped_official']} "
         f"missing_total={summary['missing_total']} "
         f"missing_backbone={summary['missing_backbone']} "
+        f"missing_unused_stage4_fuse={summary['missing_unused_stage4_fuse']} "
         f"unexpected={summary['unexpected']}"
     )
     if unmapped:

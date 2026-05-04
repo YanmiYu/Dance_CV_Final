@@ -25,14 +25,16 @@ def test_remap_keys_cover_all_backbone_groups():
         "layer1.0.downsample.0.weight": "stage1.0.downsample.0.weight",
         "layer1.3.bn3.running_var": "stage1.3.bn3.running_var",
         "transition1.0.0.weight": "trans_12.transitions.0.0.weight",
-        "transition1.1.0.weight": "trans_12.transitions.1.0.weight",
-        "transition2.2.0.weight": "trans_23.transitions.2.0.weight",
-        "transition3.3.1.bias": "trans_34.transitions.3.1.bias",
+        "transition1.1.0.0.weight": "trans_12.transitions.1.0.weight",
+        "transition2.2.0.1.running_mean": "trans_23.transitions.2.1.running_mean",
+        "transition3.3.0.1.bias": "trans_34.transitions.3.1.bias",
         "stage2.0.branches.0.0.conv1.weight": "stage2.modules_list.0.branches.0.blocks.0.conv1.weight",
         "stage2.0.branches.1.3.bn2.bias": "stage2.modules_list.0.branches.1.blocks.3.bn2.bias",
         "stage2.0.fuse_layers.0.1.0.weight": "stage2.modules_list.0.fuse.fuse_layers.0.1.0.weight",
+        "stage2.0.fuse_layers.1.0.0.0.weight": "stage2.modules_list.0.fuse.fuse_layers.1.0.0.weight",
         "stage3.2.branches.2.1.conv2.weight": "stage3.modules_list.2.branches.2.blocks.1.conv2.weight",
-        "stage4.0.fuse_layers.3.0.4.weight": "stage4.modules_list.0.fuse.fuse_layers.3.0.4.weight",
+        "stage3.0.fuse_layers.2.0.1.0.weight": "stage3.modules_list.0.fuse.fuse_layers.2.0.3.weight",
+        "stage4.0.fuse_layers.3.0.2.1.running_var": "stage4.modules_list.0.fuse.fuse_layers.3.0.7.running_var",
     }
     for off, expected in cases.items():
         assert _remap_key(off) == expected, f"{off} -> {_remap_key(off)}, expected {expected}"
@@ -100,18 +102,49 @@ def _local_to_official(key: str) -> str | None:
     if (m := _RE_LOCAL_STAGE1.match(key)) is not None:
         return f"layer1.{m.group(1)}.{m.group(2)}"
     if key.startswith("trans_12.transitions."):
-        return "transition1." + key[len("trans_12.transitions."):]
+        return _local_transition_to_official(
+            "transition1", 1, key[len("trans_12.transitions."):]
+        )
     if key.startswith("trans_23.transitions."):
-        return "transition2." + key[len("trans_23.transitions."):]
+        return _local_transition_to_official(
+            "transition2", 2, key[len("trans_23.transitions."):]
+        )
     if key.startswith("trans_34.transitions."):
-        return "transition3." + key[len("trans_34.transitions."):]
+        return _local_transition_to_official(
+            "transition3", 3, key[len("trans_34.transitions."):]
+        )
     if (m := _RE_LOCAL_STAGE_FUSE.match(key)) is not None:
         n, mod, i, j, suf = m.groups()
+        if int(i) > int(j):
+            layer, rest = suf.split(".", 1)
+            layer_idx = int(layer)
+            block = layer_idx // 3
+            block_layer = layer_idx % 3
+            return f"stage{n}.{mod}.fuse_layers.{i}.{j}.{block}.{block_layer}.{rest}"
         return f"stage{n}.{mod}.fuse_layers.{i}.{j}.{suf}"
     if (m := _RE_LOCAL_STAGE_BRANCH.match(key)) is not None:
         n, mod, i, j, suf = m.groups()
         return f"stage{n}.{mod}.branches.{i}.{j}.{suf}"
     return None
+
+
+def _local_transition_to_official(prefix: str, new_branch: int, suffix: str) -> str:
+    branch, rest = suffix.split(".", 1)
+    if int(branch) == new_branch:
+        layer, param = rest.split(".", 1)
+        layer_idx = int(layer)
+        block = layer_idx // 3
+        block_layer = layer_idx % 3
+        return f"{prefix}.{branch}.{block}.{block_layer}.{param}"
+    return f"{prefix}.{branch}.{rest}"
+
+
+def _is_unused_tiny_final_stage_fuse_key(key: str) -> bool:
+    prefix = "stage4.modules_list.0.fuse.fuse_layers."
+    if not key.startswith(prefix):
+        return False
+    row = key[len(prefix):].split(".", 1)[0]
+    return row.isdigit() and int(row) > 0
 
 
 def test_load_hrnet_imagenet_backbone_end_to_end(tmp_path: Path):
@@ -160,6 +193,37 @@ def test_load_hrnet_imagenet_backbone_end_to_end(tmp_path: Path):
     assert summary["loaded"] > 0
     assert summary["dropped_classifier"] >= 3  # classifier.weight/bias + incre_modules
     assert summary["missing_backbone"] == 0
+
+
+def test_load_tolerates_unused_final_stage_fuse_gap(tmp_path: Path):
+    from src.models.hrnet import HRNetPose
+    from src.models.hrnet_pretrained import load_hrnet_imagenet_backbone
+
+    torch.manual_seed(0)
+    src_model = HRNetPose(_TINY_CFG)
+
+    official = {}
+    omitted_reportable = 0
+    for k, v in src_model.state_dict().items():
+        if _is_unused_tiny_final_stage_fuse_key(k):
+            if not k.endswith(".num_batches_tracked"):
+                omitted_reportable += 1
+            continue
+        off = _local_to_official(k)
+        if off is not None:
+            official[off] = v.clone()
+
+    ckpt_path = tmp_path / "fake_hrnet_imagenet_missing_unused_fuse.pth"
+    torch.save({"state_dict": official}, ckpt_path)
+
+    torch.manual_seed(1)
+    tgt_model = HRNetPose(_TINY_CFG)
+    summary = load_hrnet_imagenet_backbone(tgt_model, str(ckpt_path))
+
+    assert omitted_reportable > 0
+    assert summary["missing_backbone"] == 0
+    assert summary["missing_unused_stage4_fuse"] == omitted_reportable
+    assert summary["unexpected"] == 0
 
 
 # ------------------------- param-group optimizer tests -------------------------
