@@ -1,0 +1,36 @@
+/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/models/hrnet_pretrained.py:149: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  raw = torch.load(resolved_ckpt_path, map_location="cpu")
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/train_pose.py", line 149, in <module>
+    main()
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/train_pose.py", line 116, in main
+    ctx = make_train_ctx(train_cfg, model_cfg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/train/engine.py", line 211, in make_train_ctx
+    load_hrnet_imagenet_backbone(model, backbone_path)
+  File "/oscar/scratch/mwang264/projects/CV_Tool_for_Dance_Choreography_Practice/src/models/hrnet_pretrained.py", line 168, in load_hrnet_imagenet_backbone
+    raise RuntimeError(
+RuntimeError: [hrnet-pretrained] 265 backbone keys missing after remap (>5 threshold). First 20:
+  trans_12.transitions.1.0.weight
+  trans_12.transitions.1.1.weight
+  trans_12.transitions.1.1.bias
+  trans_12.transitions.1.1.running_mean
+  trans_12.transitions.1.1.running_var
+  stage2.modules_list.0.fuse.fuse_layers.1.0.0.weight
+  stage2.modules_list.0.fuse.fuse_layers.1.0.1.weight
+  stage2.modules_list.0.fuse.fuse_layers.1.0.1.bias
+  stage2.modules_list.0.fuse.fuse_layers.1.0.1.running_mean
+  stage2.modules_list.0.fuse.fuse_layers.1.0.1.running_var
+  trans_23.transitions.2.0.weight
+  trans_23.transitions.2.1.weight
+  trans_23.transitions.2.1.bias
+  trans_23.transitions.2.1.running_mean
+  trans_23.transitions.2.1.running_var
+  stage3.modules_list.0.fuse.fuse_layers.1.0.0.weight
+  stage3.modules_list.0.fuse.fuse_layers.1.0.1.weight
+  stage3.modules_list.0.fuse.fuse_layers.1.0.1.bias
+  stage3.modules_list.0.fuse.fuse_layers.1.0.1.running_mean
+  stage3.modules_list.0.fuse.fuse_layers.1.0.1.running_var
+srun: error: gpu2101: task 0: Exited with exit code 1
