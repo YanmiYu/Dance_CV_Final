@@ -15,8 +15,12 @@ data/raw_frames/*
 !data/raw_frames/.gitkeep
 !data/raw_frames/custom_dance/
 !data/raw_frames/custom_dance/.gitkeep
-data/processed/*
+data/processed/**
+!data/processed/
+!data/processed/**/
 !data/processed/.gitkeep
+!data/processed/best.pt
+!data/processed/**/best.pt
 data/predictions/*
 !data/predictions/.gitkeep
 data/reports/*
