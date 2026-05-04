@@ -1,12 +1,11 @@
 """Mixed-dataset sampler.
 
-After the AIST-only refactor (see docs/project_decisions.md section 6) the
-only supervised training source is AIST++ labels paired with frames from
-``data/raw_videos/``; ``custom_dance_val`` may be present for evaluation.
+After the data-policy update (see docs/project_decisions.md section 6), the
+supervised training sources are AIST++ labels plus optional human-labeled
+``custom_dance`` frames. ``custom_dance_val`` may be present for evaluation.
 This class stays generic enough to support additional sources in the
-future, but :func:`src.train.train_pose._require_aistpp_only` rejects any
-training config whose ``dataset_mix`` enables anything other than
-``aistpp``.
+future, but :func:`src.train.train_pose._require_allowed_train_sources`
+rejects any training config whose ``dataset_mix`` enables unsupported sources.
 """
 from __future__ import annotations
 

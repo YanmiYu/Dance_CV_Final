@@ -43,6 +43,9 @@ score_weights:
   limb_angle:    0.3
   timing:        0.1
 
+embedding:
+  score_weight: 0.4
+
 windowing:
   seconds_per_window: 1.0
   top_k_worst_windows: 3

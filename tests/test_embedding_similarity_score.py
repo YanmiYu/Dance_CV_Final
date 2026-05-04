@@ -28,7 +28,15 @@ def _write_cached_pose(run_dir: Path, name: str, poses: np.ndarray) -> None:
     pred.mkdir(parents=True)
     np.save(pred / "poses.npy", poses)
     (pred / "meta.json").write_text(
-        json.dumps({"fps": 30.0, "num_frames": int(poses.shape[0]), "width": 640, "height": 480})
+        json.dumps(
+            {
+                "fps": 30.0,
+                "num_frames": int(poses.shape[0]),
+                "width": 640,
+                "height": 480,
+                "crop_mode": "detector_union",
+            }
+        )
     )
 
 
@@ -145,16 +153,15 @@ def test_raw_features_report_has_no_embedding_fields(tmp_path: Path) -> None:
     )
     report = json.loads((out / "report.json").read_text())
 
-    assert report["alignment_method"] == "raw_features"
-    assert report["embedding_similarity_score"] is None
-    assert report["embedding_similarity_heatmap"] is None
-    assert report["embedding_similarity_heatmap_stats"] is None
-    assert report["combined_score"] is None
-    assert report["embedding_score_weight"] is None
-    assert report["raw_overall_score"] == pytest.approx(report["scores"]["overall_score"])
-    assert report["pose_geometry_score"] == pytest.approx(report["scores"]["pose_geometry_score"])
-    # overall_score equals the legacy raw overall score for raw_features.
-    assert report["overall_score"] == pytest.approx(report["raw_overall_score"])
+    assert "embedding" not in report
+    assert set(report) == {
+        "benchmark_video",
+        "user_video",
+        "fps_used_for_timing",
+        "dtw",
+        "scores",
+        "feedback",
+    }
 
 
 def test_gnn_embedding_report_combines_geometry_and_embedding_scores(tmp_path: Path) -> None:
@@ -178,29 +185,25 @@ def test_gnn_embedding_report_combines_geometry_and_embedding_scores(tmp_path: P
     )
     report = json.loads((out / "report.json").read_text())
 
-    assert report["alignment_method"] == "gnn_embedding"
-    assert report["embedding_similarity_score"] is not None
-    assert report["embedding_similarity_heatmap"] == "embedding_similarity_heatmap.png"
-    assert (out / report["embedding_similarity_heatmap"]).exists()
-    assert report["embedding_similarity_heatmap_stats"]["shape"] == [40, 38]
-    assert -1.0 <= report["embedding_similarity_heatmap_stats"]["min"] <= 1.0
-    assert -1.0 <= report["embedding_similarity_heatmap_stats"]["max"] <= 1.0
-    assert 0.0 <= report["embedding_similarity_score"] <= 100.0
-    assert report["combined_score"] is not None
-    assert report["embedding_score_weight"] == pytest.approx(0.4)
-    assert report["raw_overall_score"] == pytest.approx(report["scores"]["overall_score"])
-    assert report["pose_geometry_score"] == pytest.approx(report["scores"]["pose_geometry_score"])
+    embedding = report["embedding"]
+    assert embedding["alignment_method"] == "gnn_embedding"
+    assert embedding["embedding_similarity_score"] is not None
+    assert embedding["heatmap"] == "embedding_similarity_heatmap.png"
+    assert embedding["over_time_plot"] == "embedding_similarity_over_time.png"
+    assert (out / embedding["heatmap"]).exists()
+    assert (out / embedding["over_time_plot"]).exists()
+    assert embedding["heatmap_stats"]["shape"] == [40, 38]
+    assert -1.0 <= embedding["heatmap_stats"]["min"] <= 1.0
+    assert -1.0 <= embedding["heatmap_stats"]["max"] <= 1.0
+    assert 0.0 <= embedding["embedding_similarity_score"] <= 100.0
+    assert embedding["combined_score"] is not None
+    assert embedding["embedding_score_weight"] == pytest.approx(0.4)
 
-    geom = report["pose_geometry_score"]
-    emb = report["embedding_similarity_score"]
-    expected_combined = 0.6 * geom + 0.4 * emb
-    assert report["combined_score"] == pytest.approx(expected_combined, abs=1e-4)
-    # Top-level overall_score must equal the combined score for gnn_embedding.
-    assert report["overall_score"] == pytest.approx(report["combined_score"], abs=1e-4)
+    raw_overall = report["scores"]["overall_score"]
+    emb = embedding["embedding_similarity_score"]
+    expected_combined = 0.6 * raw_overall + 0.4 * emb
+    assert embedding["combined_score"] == pytest.approx(expected_combined, abs=1e-4)
 
-    # Body-part feedback / severity must still come from raw geometry,
-    # not from the embedding distances.
-    assert report["per_part_summary"]
     assert "scores" in report
     assert "per_body_part_score" in report["scores"]
 
@@ -225,6 +228,8 @@ def test_embedding_score_weight_is_clamped_to_unit_interval(tmp_path: Path) -> N
         embedding_score_weight=2.5,  # out-of-range, must clamp to 1.0
     )
     report = json.loads((out / "report.json").read_text())
-    assert report["embedding_score_weight"] == pytest.approx(1.0)
+    assert report["embedding"]["embedding_score_weight"] == pytest.approx(1.0)
     # With weight=1.0 the combined score is just the embedding score.
-    assert report["combined_score"] == pytest.approx(report["embedding_similarity_score"])
+    assert report["embedding"]["combined_score"] == pytest.approx(
+        report["embedding"]["embedding_similarity_score"]
+    )

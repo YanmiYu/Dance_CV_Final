@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -17,27 +16,40 @@ import cv2
 import numpy as np
 
 from src.compare.dtw_align import DTWConfig, build_feature_weights, dtw_align
-from src.compare.feedback import (
-    extract_feedback_intervals,
-    generate_feedback,
-    severity_sequence_per_part,
-)
+from src.compare.feedback import generate_feedback
 from src.compare.features import FeatureConfig, extract_features, framewise_distance_vector
 from src.compare.normalize_pose import NormalizeConfig, normalize_sequence
 from src.compare.score import ScoreConfig, compare_features, score_result_to_dict
-from src.datasets.common import BODY_PART_GROUPS, NUM_JOINTS
 from src.infer.temporal_smooth import SmoothConfig, smooth_sequence
 from src.utils.config import load_yaml
 from src.utils.io import ensure_dir
-from src.utils.viz import (
-    SEVERITY_BGR,
-    draw_pose,
-    draw_severity_legend,
-    draw_skeleton_blank,
-    draw_skeleton_overlay,
-    side_by_side,
-)
+from src.utils.viz import draw_pose, side_by_side
 from src.utils.video import ffprobe_meta, write_video
+
+# #region agent log
+import json as _dbg_json
+import time as _dbg_time
+
+_DBG_LOG_PATH = "/Users/mohanwang/Desktop/Projects/CV_Tool_for_Dance_Choreography_Practice/.cursor/debug-a418b2.log"
+
+
+def _dbg_log(location: str, message: str, data: dict, hypothesis: str = "") -> None:
+    try:
+        payload = {
+            "sessionId": "a418b2",
+            "id": f"log_{int(_dbg_time.time() * 1000)}_{location}",
+            "timestamp": int(_dbg_time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data,
+            "runId": "render-debug",
+            "hypothesisId": hypothesis,
+        }
+        with open(_DBG_LOG_PATH, "a") as _f:
+            _f.write(_dbg_json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 
 def _run_pose_if_needed(
@@ -45,76 +57,29 @@ def _run_pose_if_needed(
     model_config: str,
     ckpt: str,
     out_dir: Path,
+    *,
+    crop_mode: str = "detector_union",
+    detector_kwargs: Optional[dict] = None,
 ) -> Path:
     """Run ``src.infer.run_pose_on_video.run`` and return its out_dir path."""
     if (out_dir / "poses.npy").exists():
-        return out_dir
+        existing_mode = None
+        meta_path = out_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                existing_mode = meta.get("crop_mode") or (meta.get("crop") or {}).get("mode")
+            except Exception:
+                existing_mode = None
+        # Older prediction caches predate crop metadata and were motion-crop based.
+        existing_mode = existing_mode or "motion"
+        if existing_mode == crop_mode:
+            return out_dir
+        print(f"recomputing {out_dir}: cached crop_mode={existing_mode!r}, requested={crop_mode!r}")
     from src.infer.run_pose_on_video import run as _run
 
-    _run(video_path, model_config, ckpt, str(out_dir))
+    _run(video_path, model_config, ckpt, str(out_dir), crop_mode=crop_mode, **(detector_kwargs or {}))
     return out_dir
-
-
-def _load_pose_file(path: str | Path) -> np.ndarray:
-    """Load a raw AIST-style keypoint file as ``(T, 17, 3)`` float32 poses."""
-    path = Path(path)
-    if path.suffix == ".npy":
-        obj = np.load(path)
-    else:
-        with path.open("rb") as f:
-            obj = pickle.load(f)
-        if isinstance(obj, dict):
-            if "keypoints2d" not in obj:
-                raise ValueError(f"{path} is missing key 'keypoints2d'")
-            obj = obj["keypoints2d"]
-
-    poses = np.asarray(obj, dtype=np.float32)
-    if poses.ndim != 3 or poses.shape[1] != NUM_JOINTS or poses.shape[2] not in (2, 3):
-        raise ValueError(f"expected keypoints shape (T, 17, 2|3), got {poses.shape} in {path}")
-    if poses.shape[2] == 2:
-        conf = np.ones((*poses.shape[:2], 1), dtype=np.float32)
-        poses = np.concatenate([poses, conf], axis=-1)
-    return poses
-
-
-def _pose_from_file(video_path: str, pose_path: str | Path, out_dir: Path) -> Path:
-    """Materialize supplied keypoints into the same cache layout as pose inference."""
-    out_dir = ensure_dir(out_dir)
-    poses = _load_pose_file(pose_path)
-    np.save(out_dir / "poses.npy", poses)
-
-    video_meta = ffprobe_meta(video_path)
-    fps = video_meta.fps if video_meta.ok and video_meta.fps > 0 else 30.0
-    (out_dir / "meta.json").write_text(
-        json.dumps(
-            {
-                "video_path": str(video_path),
-                "keypoints_path": str(pose_path),
-                "source": "keypoints_file",
-                "fps": fps,
-                "num_frames": int(poses.shape[0]),
-                "width": video_meta.width if video_meta.ok else 0,
-                "height": video_meta.height if video_meta.ok else 0,
-                "duration_sec": video_meta.duration_sec if video_meta.ok else 0.0,
-            },
-            indent=2,
-        )
-    )
-    return out_dir
-
-
-def _resolve_pose_input(
-    video_path: str,
-    model_config: Optional[str],
-    ckpt: Optional[str],
-    out_dir: Path,
-    pose_file: Optional[str],
-) -> Path:
-    if pose_file:
-        return _pose_from_file(video_path, pose_file, out_dir)
-    if not model_config or not ckpt:
-        raise ValueError("--model-config and --ckpt are required unless a pose file is supplied")
-    return _run_pose_if_needed(video_path, model_config, ckpt, out_dir)
 
 
 def _render_bar_chart(per_part: Dict[str, float], path: Path) -> None:
@@ -137,7 +102,6 @@ def _render_bar_chart(per_part: Dict[str, float], path: Path) -> None:
 
 
 def _matrix_stats(matrix: np.ndarray) -> Dict[str, float | list]:
-    """Small JSON-safe summary for a similarity matrix."""
     arr = np.asarray(matrix, dtype=np.float32)
     if arr.size == 0:
         return {
@@ -154,6 +118,22 @@ def _matrix_stats(matrix: np.ndarray) -> Dict[str, float | list]:
     }
 
 
+def _aligned_cosine_series(
+    emb_a: np.ndarray,
+    emb_b: np.ndarray,
+    aligned_a_idx: np.ndarray,
+    aligned_b_idx: np.ndarray,
+) -> np.ndarray:
+    L = int(min(len(aligned_a_idx), len(aligned_b_idx)))
+    if L == 0 or emb_a.size == 0 or emb_b.size == 0:
+        return np.zeros((0,), dtype=np.float32)
+    a = emb_a[np.asarray(aligned_a_idx[:L], dtype=np.int64)]
+    b = emb_b[np.asarray(aligned_b_idx[:L], dtype=np.int64)]
+    a = a / np.clip(np.linalg.norm(a, axis=1, keepdims=True), 1e-8, None)
+    b = b / np.clip(np.linalg.norm(b, axis=1, keepdims=True), 1e-8, None)
+    return np.sum(a * b, axis=1).astype(np.float32, copy=False)
+
+
 def _render_embedding_similarity_heatmap(
     similarity: np.ndarray,
     out_path: Path,
@@ -161,24 +141,23 @@ def _render_embedding_similarity_heatmap(
     aligned_a_idx: Optional[np.ndarray] = None,
     aligned_b_idx: Optional[np.ndarray] = None,
 ) -> None:
-    """Render benchmark-vs-user embedding cosine similarities as a heatmap."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     sim = np.asarray(similarity, dtype=np.float32)
     fig, ax = plt.subplots(figsize=(10, 7), constrained_layout=True)
+    shown = sim if sim.size else np.zeros((max(1, sim.shape[0]), max(1, sim.shape[1])), dtype=np.float32)
+    image = ax.imshow(
+        shown,
+        aspect="auto",
+        origin="lower",
+        cmap="viridis",
+        vmin=-1.0,
+        vmax=1.0,
+        interpolation="nearest",
+    )
     if sim.size == 0:
-        shown = np.zeros((max(1, sim.shape[0]), max(1, sim.shape[1])), dtype=np.float32)
-        image = ax.imshow(
-            shown,
-            aspect="auto",
-            origin="lower",
-            cmap="magma",
-            vmin=-1.0,
-            vmax=1.0,
-            interpolation="nearest",
-        )
         ax.text(
             0.5,
             0.5,
@@ -188,16 +167,6 @@ def _render_embedding_similarity_heatmap(
             va="center",
             color="white",
             fontsize=13,
-        )
-    else:
-        image = ax.imshow(
-            sim,
-            aspect="auto",
-            origin="lower",
-            cmap="magma",
-            vmin=-1.0,
-            vmax=1.0,
-            interpolation="nearest",
         )
 
     if (
@@ -228,289 +197,165 @@ def _render_embedding_similarity_heatmap(
     plt.close(fig)
 
 
-def _render_side_by_side_skeleton(
-    bench_poses: np.ndarray,
-    user_poses: np.ndarray,
-    aligned_a_idx: np.ndarray,
-    aligned_b_idx: np.ndarray,
-    severity_per_part_seq: Dict[str, list],
+def _render_embedding_similarity_over_time(
+    cosine: np.ndarray,
+    timestamps_sec: np.ndarray,
     out_path: Path,
-    fps: float = 30.0,
-    *,
-    canvas_w: int = 480,
-    canvas_h: int = 720,
 ) -> None:
-    """Render the demo video: two blank panels with skeletons drawn on top.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
-    The benchmark panel uses a neutral color; the learner panel colors each
-    body-part region by severity (green / yellow / red). One output frame
-    per DTW step; output fps matches benchmark fps so the timeline aligns
-    with the reference.
+    cosine = np.asarray(cosine, dtype=np.float32)
+    timestamps_sec = np.asarray(timestamps_sec, dtype=np.float32)
+    fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
+    if cosine.size:
+        ax.plot(timestamps_sec[: cosine.shape[0]], cosine, color="#2563eb", linewidth=1.6)
+    else:
+        ax.text(0.5, 0.5, "No aligned embeddings available", transform=ax.transAxes, ha="center", va="center")
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_xlabel("Benchmark Time (s)", fontsize=12)
+    ax.set_ylabel("Cosine Similarity", fontsize=12)
+    ax.set_title("Embedding Similarity Over Time", fontsize=15)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(labelsize=10)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def _render_side_by_side(
+    bench_video: str, user_video: str,
+    bench_poses: np.ndarray, user_poses: np.ndarray,
+    dtw_path: np.ndarray, out_path: Path, fps: float = 30.0,
+    bench_fps: Optional[float] = None,
+    user_fps: Optional[float] = None,
+) -> None:
+    """Render side-by-side using uniform time-based sampling.
+
+    ``dtw_path`` is kept in the signature (DTW is used for scoring) but is
+    intentionally NOT used for rendering: using it causes the right panel to
+    freeze whenever DTW assigns many benchmark frames to a single user frame
+    (common when videos have leading/trailing idle time or differing fps).
+    Instead, both videos are played back at their natural fps on a shared
+    timeline so each side moves at natural speed.
     """
-    aligned_a_idx = np.asarray(aligned_a_idx, dtype=np.int64)
-    aligned_b_idx = np.asarray(aligned_b_idx, dtype=np.int64)
-    L = int(min(aligned_a_idx.shape[0], aligned_b_idx.shape[0]))
-    if L == 0:
-        return
-    sev_lengths = {len(v) for v in severity_per_part_seq.values()}
-    if sev_lengths and sev_lengths != {L}:
-        raise ValueError(
-            f"severity sequences length mismatch: expected {L}, got {sev_lengths}"
-        )
+    cap_a = cv2.VideoCapture(bench_video)
+    cap_b = cv2.VideoCapture(user_video)
+    Ta = int(len(bench_poses))
+    Tb = int(len(user_poses))
+    if bench_fps is None or bench_fps <= 0:
+        bench_fps = float(cap_a.get(cv2.CAP_PROP_FPS)) or fps
+    if user_fps is None or user_fps <= 0:
+        user_fps = float(cap_b.get(cv2.CAP_PROP_FPS)) or fps
+    out_fps = float(fps)
 
-    frames = []
-    for k in range(L):
-        ai = int(aligned_a_idx[k])
-        bi = int(aligned_b_idx[k])
-        bench_panel = draw_skeleton_blank(
-            (canvas_h, canvas_w, 3), bench_poses[ai], severity_per_part=None
-        )
-        sev = {part: severity_per_part_seq[part][k] for part in severity_per_part_seq}
-        user_panel = draw_skeleton_blank(
-            (canvas_h, canvas_w, 3), user_poses[bi], severity_per_part=sev
-        )
-        cv2.putText(
-            bench_panel, f"benchmark  t={ai / fps:.2f}s",
-            (10, canvas_h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-            (220, 220, 220), 1, cv2.LINE_AA,
-        )
-        cv2.putText(
-            user_panel, f"learner    t={bi / fps:.2f}s",
-            (10, canvas_h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-            (220, 220, 220), 1, cv2.LINE_AA,
-        )
-        draw_severity_legend(user_panel, origin=(canvas_w - 130, 10))
-        frames.append(np.hstack([bench_panel, user_panel]))
+    bench_duration = Ta / max(bench_fps, 1e-6)
+    user_duration = Tb / max(user_fps, 1e-6)
+    out_duration = min(bench_duration, user_duration)
+    out_len = max(1, int(round(out_duration * out_fps)))
+
+    # #region agent log
+    _dbg_log(
+        "render_report.py:render_side_by_side:entry",
+        "side-by-side entry (post-fix): uniform-time sampling",
+        {
+            "bench_video": bench_video,
+            "user_video": user_video,
+            "bench_fps": float(bench_fps),
+            "user_fps": float(user_fps),
+            "out_fps": float(out_fps),
+            "Ta": Ta,
+            "Tb": Tb,
+            "bench_duration_sec": float(bench_duration),
+            "user_duration_sec": float(user_duration),
+            "out_len_frames": int(out_len),
+            "dtw_path_len_unused": int(len(dtw_path)),
+            "user_poses_xy_min": [float(user_poses[..., 0].min()), float(user_poses[..., 1].min())],
+            "user_poses_xy_max": [float(user_poses[..., 0].max()), float(user_poses[..., 1].max())],
+        },
+        hypothesis="post-fix",
+    )
+    _iter_samples = []
+    # #endregion
+
+    a_next = 0
+    b_next = 0
+    last_a = None
+    last_b = None
+    frames: list[np.ndarray] = []
+    for t in range(out_len):
+        sec = t / out_fps
+        ai = min(Ta - 1, int(round(sec * bench_fps)))
+        bi = min(Tb - 1, int(round(sec * user_fps)))
+
+        while a_next <= ai:
+            ok, fr = cap_a.read()
+            if not ok:
+                break
+            last_a = fr
+            a_next += 1
+        while b_next <= bi:
+            ok, fr = cap_b.read()
+            if not ok:
+                break
+            last_b = fr
+            b_next += 1
+
+        # #region agent log
+        if t < 5 or t % max(1, out_len // 20) == 0:
+            _iter_samples.append({
+                "t": int(t),
+                "ai": int(ai),
+                "bi": int(bi),
+                "a_next": int(a_next),
+                "b_next": int(b_next),
+                "last_a_none": last_a is None,
+                "last_b_none": last_b is None,
+            })
+        # #endregion
+
+        if last_a is None or last_b is None:
+            continue
+        overlay_a = draw_pose(last_a, bench_poses[ai])
+        overlay_b = draw_pose(last_b, user_poses[bi])
+        frame = side_by_side(overlay_a, overlay_b, label_a="benchmark", label_b="you")
+        frames.append(frame)
+
+    cap_a.release()
+    cap_b.release()
+
+    # #region agent log
+    _dbg_log(
+        "render_report.py:render_side_by_side:iter_samples",
+        "per-iter sample captures (post-fix)",
+        {
+            "samples": _iter_samples,
+            "total_iters": int(out_len),
+            "frames_written": int(len(frames)),
+        },
+        hypothesis="post-fix",
+    )
+    # #endregion
 
     if frames:
         h, w = frames[0].shape[:2]
-        write_video(out_path, iter(frames), fps=fps, size=(w, h))
-
-
-def _dominant_severity_part(severity: Dict[str, str]) -> Optional[str]:
-    """Pick a label-worthy part: prefer red, then yellow; ignore green."""
-    reds = [p for p, s in severity.items() if s == "red"]
-    if reds:
-        return reds[0]
-    yellows = [p for p, s in severity.items() if s == "yellow"]
-    if yellows:
-        return yellows[0]
-    return None
-
-
-def _render_side_by_side_real(
-    bench_video: str,
-    user_video: str,
-    bench_poses: np.ndarray,
-    user_poses: np.ndarray,
-    aligned_a_idx: np.ndarray,
-    aligned_b_idx: np.ndarray,
-    severity_per_part_seq: Dict[str, list],
-    out_path: Path,
-    fps: float,
-    *,
-    target_h: int = 540,
-    bench_color: Tuple[int, int, int] = (240, 240, 240),
-) -> None:
-    """Render the demo video onto the actual benchmark / learner footage.
-
-    Both videos are walked sequentially (no per-frame seeking). Because the
-    DTW path is monotonic non-decreasing in both indices, we can decode each
-    video front-to-back exactly once and reuse the most recent decoded frame
-    whenever the path holds an index constant. Frames are downscaled to
-    ``target_h`` before drawing; the AIST 2D keypoints, which are in
-    source-video pixel coordinates, are scaled by the same factor so the
-    skeleton lines up.
-    """
-    aligned_a_idx = np.asarray(aligned_a_idx, dtype=np.int64)
-    aligned_b_idx = np.asarray(aligned_b_idx, dtype=np.int64)
-    L = int(min(aligned_a_idx.shape[0], aligned_b_idx.shape[0]))
-    if L == 0:
-        return
-
-    cap_a = cv2.VideoCapture(str(bench_video))
-    cap_b = cv2.VideoCapture(str(user_video))
-    if not cap_a.isOpened() or not cap_b.isOpened():
-        cap_a.release()
-        cap_b.release()
-        raise RuntimeError(f"cannot open video(s): {bench_video} / {user_video}")
-
-    try:
-        Wa = int(cap_a.get(cv2.CAP_PROP_FRAME_WIDTH))
-        Ha = int(cap_a.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        Wb = int(cap_b.get(cv2.CAP_PROP_FRAME_WIDTH))
-        Hb = int(cap_b.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if Ha <= 0 or Hb <= 0:
-            raise RuntimeError("video reported zero height")
-
-        panel_h = int(target_h)
-        panel_wa = max(1, int(round(Wa * panel_h / Ha)))
-        panel_wb = max(1, int(round(Wb * panel_h / Hb)))
-        sa_x, sa_y = panel_wa / float(Wa), panel_h / float(Ha)
-        sb_x, sb_y = panel_wb / float(Wb), panel_h / float(Hb)
-        out_size = (panel_wa + panel_wb, panel_h)
-
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(
-            str(out_path),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            float(fps),
-            out_size,
-        )
-        try:
-            prev_a = -1
-            prev_b = -1
-            last_a: Optional[np.ndarray] = None
-            last_b: Optional[np.ndarray] = None
-
-            T_b = int(bench_poses.shape[0])
-            T_u = int(user_poses.shape[0])
-
-            for k in range(L):
-                ai = int(aligned_a_idx[k])
-                bi = int(aligned_b_idx[k])
-
-                # Sequential decode — uses grab() to skip to the target,
-                # then read() once for the frame we actually render.
-                while prev_a < ai - 1:
-                    if not cap_a.grab():
-                        break
-                    prev_a += 1
-                if prev_a < ai:
-                    ok, frame = cap_a.read()
-                    prev_a += 1
-                    if ok:
-                        last_a = frame
-                while prev_b < bi - 1:
-                    if not cap_b.grab():
-                        break
-                    prev_b += 1
-                if prev_b < bi:
-                    ok, frame = cap_b.read()
-                    prev_b += 1
-                    if ok:
-                        last_b = frame
-                if last_a is None or last_b is None:
-                    continue
-
-                a_disp = cv2.resize(last_a, (panel_wa, panel_h))
-                b_disp = cv2.resize(last_b, (panel_wb, panel_h))
-
-                if 0 <= ai < T_b:
-                    bp = bench_poses[ai].astype(np.float32, copy=True)
-                    bp[:, 0] *= sa_x
-                    bp[:, 1] *= sa_y
-                    a_disp = draw_skeleton_overlay(
-                        a_disp, bp, severity_per_part=None, base_color=bench_color,
-                    )
-                if 0 <= bi < T_u:
-                    up = user_poses[bi].astype(np.float32, copy=True)
-                    up[:, 0] *= sb_x
-                    up[:, 1] *= sb_y
-                    sev = {part: severity_per_part_seq[part][k] for part in severity_per_part_seq}
-                    b_disp = draw_skeleton_overlay(
-                        b_disp, up, severity_per_part=sev,
-                    )
-
-                cv2.putText(
-                    a_disp, f"benchmark  t={ai / fps:.2f}s",
-                    (10, panel_h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (255, 255, 255), 2, cv2.LINE_AA,
-                )
-                cv2.putText(
-                    b_disp, f"learner    t={bi / fps:.2f}s",
-                    (10, panel_h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (255, 255, 255), 2, cv2.LINE_AA,
-                )
-                draw_severity_legend(b_disp, origin=(panel_wb - 130, 10))
-
-                worst = _dominant_severity_part(
-                    {p: severity_per_part_seq[p][k] for p in severity_per_part_seq}
-                )
-                if worst is not None:
-                    level = severity_per_part_seq[worst][k]
-                    cv2.putText(
-                        b_disp, f"{worst.replace('_', ' ')}: {level}",
-                        (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
-                        SEVERITY_BGR[level], 2, cv2.LINE_AA,
-                    )
-
-                writer.write(np.hstack([a_disp, b_disp]))
-        finally:
-            writer.release()
-    finally:
-        cap_a.release()
-        cap_b.release()
-
-
-def _per_part_error_seq(
-    aligned_joint_err: np.ndarray,
-) -> Dict[str, np.ndarray]:
-    """Aggregate ``(L, 17)`` joint errors into per-body-part sequences ``(L,)``.
-
-    Frames where every joint in a part is masked yield NaN from
-    ``np.nanmean`` (with a ``RuntimeWarning``); we suppress that warning and
-    treat such frames as zero error.
-    """
-    import warnings
-
-    out: Dict[str, np.ndarray] = {}
-    if aligned_joint_err.size == 0:
-        for part in BODY_PART_GROUPS:
-            out[part] = np.zeros((0,), dtype=np.float32)
-        return out
-    for part, idxs in BODY_PART_GROUPS.items():
-        sub = aligned_joint_err[:, list(idxs)]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            mean = np.nanmean(sub, axis=1)
-        out[part] = np.nan_to_num(mean, nan=0.0).astype(np.float32, copy=False)
-    return out
-
-
-def _per_part_summary(
-    per_part_err: Dict[str, np.ndarray],
-    per_part_score: Dict[str, float],
-    severities: Dict[str, list],
-) -> Dict[str, Dict[str, float]]:
-    summary: Dict[str, Dict[str, float]] = {}
-    for part, errs in per_part_err.items():
-        sev = severities.get(part, [])
-        n = max(len(sev), 1)
-        pct_red = 100.0 * sum(1 for s in sev if s == "red") / n
-        pct_yellow = 100.0 * sum(1 for s in sev if s == "yellow") / n
-        if errs.size:
-            mean_err = float(np.mean(errs))
-            max_err = float(np.max(errs))
-        else:
-            mean_err = 0.0
-            max_err = 0.0
-        summary[part] = {
-            "score": float(per_part_score.get(part, 0.0)),
-            "mean_error": mean_err,
-            "max_error": max_err,
-            "pct_yellow": pct_yellow,
-            "pct_red": pct_red,
-        }
-    return summary
+        write_video(out_path, iter(frames), fps=out_fps, size=(w, h))
 
 
 def run(
     benchmark_video: str,
     user_video: str,
-    model_config: Optional[str],
-    ckpt: Optional[str],
+    model_config: str,
+    ckpt: str,
     compare_config: str,
     out_root: str,
     render_video: bool = True,
+    crop_mode: str = "detector_union",
+    detector_kwargs: Optional[dict] = None,
     alignment_method: str = "raw_features",
     gnn_checkpoint: Optional[str] = None,
     gnn_device: str = "auto",
-    gnn_batch_size: int = 256,
-    bench_poses_pkl: Optional[str] = None,
-    user_poses_pkl: Optional[str] = None,
-    embedding_score_weight: float = 0.4,
+    embedding_score_weight: Optional[float] = None,
 ) -> Path:
     out_root = ensure_dir(out_root)
     cfg = load_yaml(compare_config)
@@ -519,11 +364,15 @@ def run(
     if alignment_method == "gnn_embedding" and not gnn_checkpoint:
         raise ValueError("--gnn-checkpoint is required when --alignment-method gnn_embedding")
 
-    bench_pred = _resolve_pose_input(
-        benchmark_video, model_config, ckpt, out_root / "benchmark_pose", bench_poses_pkl
+    bench_pred = _run_pose_if_needed(
+        benchmark_video, model_config, ckpt, out_root / "benchmark_pose",
+        crop_mode=crop_mode,
+        detector_kwargs=detector_kwargs,
     )
-    user_pred = _resolve_pose_input(
-        user_video, model_config, ckpt, out_root / "user_pose", user_poses_pkl
+    user_pred = _run_pose_if_needed(
+        user_video, model_config, ckpt, out_root / "user_pose",
+        crop_mode=crop_mode,
+        detector_kwargs=detector_kwargs,
     )
 
     bench_raw = np.load(bench_pred / "poses.npy")
@@ -532,6 +381,20 @@ def run(
     bench_meta = json.loads((bench_pred / "meta.json").read_text())
     user_meta = json.loads((user_pred / "meta.json").read_text())
     fps = float(bench_meta.get("fps") or 30.0)
+    # #region agent log
+    _dbg_log(
+        "render_report.py:run:fps_mismatch",
+        "fps and frame counts for both videos",
+        {
+            "bench_fps": float(bench_meta.get("fps") or 0),
+            "user_fps": float(user_meta.get("fps") or 0),
+            "bench_frames": int(bench_meta.get("num_frames") or 0),
+            "user_frames": int(user_meta.get("num_frames") or 0),
+            "output_fps_used": float(fps),
+        },
+        hypothesis="H1,H3",
+    )
+    # #endregion
 
     bench_smooth = smooth_sequence(bench_raw, SmoothConfig())
     user_smooth = smooth_sequence(user_raw, SmoothConfig())
@@ -548,18 +411,22 @@ def run(
     bench_feats = extract_features(bench_norm, bench_mask, feat_cfg)
     user_feats = extract_features(user_norm, user_mask, feat_cfg)
 
-    embedding_dim: Optional[int] = None
+    raw_A = framewise_distance_vector(bench_feats)
+    raw_B = framewise_distance_vector(user_feats)
+    bench_embeddings: Optional[np.ndarray] = None
+    user_embeddings: Optional[np.ndarray] = None
     if alignment_method == "raw_features":
-        A = framewise_distance_vector(bench_feats)
-        B = framewise_distance_vector(user_feats)
+        A = raw_A
+        B = raw_B
         feature_weights = build_feature_weights(A.shape[1], 17)
     else:
         from src.compare.embedding_features import encode_pose_sequence, load_pose_gnn_encoder
 
         model, device_t = load_pose_gnn_encoder(gnn_checkpoint, device=gnn_device)
-        A = encode_pose_sequence(model, bench_norm, device=device_t, batch_size=gnn_batch_size)
-        B = encode_pose_sequence(model, user_norm, device=device_t, batch_size=gnn_batch_size)
-        embedding_dim = int(A.shape[1]) if A.ndim == 2 else None
+        bench_embeddings = encode_pose_sequence(model, bench_norm, device=device_t)
+        user_embeddings = encode_pose_sequence(model, user_norm, device=device_t)
+        A = bench_embeddings
+        B = user_embeddings
         feature_weights = None
 
     dtw_cfg = DTWConfig(
@@ -579,131 +446,75 @@ def run(
     result = compare_features(bench_feats, user_feats, dtw, score_cfg, fps=fps)
     feedback_lines = generate_feedback(result)
 
-    # Per-aligned-frame, per-body-part errors drive both severity coloring
-    # in the video and the timestamped feedback intervals.
-    per_part_err_seq = _per_part_error_seq(result.aligned_joint_err)
-    aligned_t_sec = result.aligned_a_idx.astype(np.float32) / float(fps)
-    severities, (low_t, high_t) = severity_sequence_per_part(per_part_err_seq)
-    feedback_intervals = extract_feedback_intervals(per_part_err_seq, aligned_t_sec)
-    per_part_summary = _per_part_summary(per_part_err_seq, result.per_body_part_score, severities)
-
-    duration_seconds = float(bench_raw.shape[0]) / float(fps) if bench_raw.shape[0] else 0.0
-
-    # ``compare_features`` returns the legacy raw overall score
-    # (pose geometry + limb angles + timing) plus the literal body-part
-    # geometry score. Keep both names explicit at the report top level.
-    raw_overall_score = float(result.overall_score)
-    pose_geometry_score = float(result.pose_geometry_score)
-
-    # Embedding similarity is GNN-only: for raw_features we leave the
-    # corresponding fields as None and the top-level overall_score stays equal
-    # to the legacy raw overall score. Clamp the weight to ``[0, 1]`` so the
-    # combined score is a true convex combination of literal geometry and
-    # embedding similarity.
-    embedding_similarity_score: Optional[float] = None
-    embedding_stats: Optional[Dict[str, float]] = None
-    embedding_similarity_heatmap: Optional[str] = None
-    embedding_similarity_heatmap_stats: Optional[Dict[str, float | list]] = None
-    combined_score: Optional[float] = None
-    emb_weight = float(np.clip(embedding_score_weight, 0.0, 1.0))
-
-    if alignment_method == "gnn_embedding":
-        from src.compare.embedding_features import (
-            compute_embedding_similarity,
-            pairwise_cosine_similarity,
-        )
-
-        embedding_stats = compute_embedding_similarity(
-            A, B, result.aligned_a_idx, result.aligned_b_idx
-        )
-        embedding_similarity_score = float(embedding_stats["score"])
-        combined_score = float(
-            (1.0 - emb_weight) * pose_geometry_score
-            + emb_weight * embedding_similarity_score
-        )
-        overall_score = combined_score
-
-        similarity_matrix = pairwise_cosine_similarity(A, B)
-        embedding_similarity_heatmap = "embedding_similarity_heatmap.png"
-        embedding_similarity_heatmap_stats = _matrix_stats(similarity_matrix)
-        _render_embedding_similarity_heatmap(
-            similarity_matrix,
-            out_root / embedding_similarity_heatmap,
-            aligned_a_idx=result.aligned_a_idx,
-            aligned_b_idx=result.aligned_b_idx,
-        )
-    else:
-        overall_score = raw_overall_score
-
-    # Write artifacts. The schema keeps backward-compatible keys (``scores``,
-    # ``feedback``, ``alignment``, ``dtw``) and adds the structured fields the
-    # demo UI consumes (``overall_score``, ``feedback_intervals``,
-    # ``per_part_summary``, plus the GNN-aware score breakdown).
+    # Write artifacts.
     report = {
-        "overall_score": float(overall_score),
-        "raw_overall_score": raw_overall_score,
-        "pose_geometry_score": pose_geometry_score,
-        "embedding_similarity_score": embedding_similarity_score,
-        "embedding_similarity_heatmap": embedding_similarity_heatmap,
-        "embedding_similarity_heatmap_stats": embedding_similarity_heatmap_stats,
-        "combined_score": combined_score,
-        "embedding_score_weight": emb_weight if alignment_method == "gnn_embedding" else None,
-        "fps": float(fps),
-        "duration_seconds": duration_seconds,
-        "alignment_method": alignment_method,
         "benchmark_video": benchmark_video,
         "user_video": user_video,
-        "alignment": {
-            "method": alignment_method,
-            "feature_shape_benchmark": list(A.shape),
-            "feature_shape_user": list(B.shape),
-            "gnn_checkpoint": gnn_checkpoint if alignment_method == "gnn_embedding" else None,
-            "embedding_dim": embedding_dim,
-        },
         "fps_used_for_timing": fps,
         "dtw": {
             "cost": dtw.cost,
             "path_length": int(len(dtw.path)),
             "timing_skew_sec": dtw.timing_skew_sec,
         },
-        "embedding_stats": embedding_stats,
-        "severity_thresholds": {"yellow": float(low_t), "red": float(high_t)},
         "scores": score_result_to_dict(result),
-        "per_part_summary": per_part_summary,
         "feedback": feedback_lines,
-        "feedback_intervals": [iv.to_dict() for iv in feedback_intervals],
     }
+    if alignment_method == "gnn_embedding":
+        from src.compare.embedding_features import compute_embedding_similarity, pairwise_cosine_similarity
+
+        assert bench_embeddings is not None and user_embeddings is not None
+        emb_cfg = cfg.get("embedding", {}) or {}
+        if embedding_score_weight is None:
+            embedding_score_weight = float(emb_cfg.get("score_weight", 0.4))
+        emb_weight = float(np.clip(float(embedding_score_weight), 0.0, 1.0))
+        embedding_stats = compute_embedding_similarity(
+            bench_embeddings, user_embeddings, dtw.aligned_a_idx, dtw.aligned_b_idx
+        )
+        embedding_similarity_score = float(embedding_stats["score"])
+        raw_overall = float(report["scores"]["overall_score"])
+        combined_score = float((1.0 - emb_weight) * raw_overall + emb_weight * embedding_similarity_score)
+
+        similarity_matrix = pairwise_cosine_similarity(bench_embeddings, user_embeddings)
+        heatmap_name = "embedding_similarity_heatmap.png"
+        over_time_name = "embedding_similarity_over_time.png"
+        _render_embedding_similarity_heatmap(
+            similarity_matrix,
+            out_root / heatmap_name,
+            aligned_a_idx=dtw.aligned_a_idx,
+            aligned_b_idx=dtw.aligned_b_idx,
+        )
+        aligned_cosine = _aligned_cosine_series(
+            bench_embeddings, user_embeddings, dtw.aligned_a_idx, dtw.aligned_b_idx
+        )
+        _render_embedding_similarity_over_time(
+            aligned_cosine,
+            dtw.aligned_a_idx.astype(np.float32) / max(fps, 1e-6),
+            out_root / over_time_name,
+        )
+        report["embedding"] = {
+            "alignment_method": "gnn_embedding",
+            "embedding_similarity_score": embedding_similarity_score,
+            "embedding_score_weight": emb_weight,
+            "combined_score": combined_score,
+            "embedding_stats": embedding_stats,
+            "embedding_dim": int(bench_embeddings.shape[1]) if bench_embeddings.ndim == 2 else None,
+            "gnn_checkpoint": str(gnn_checkpoint),
+            "heatmap": heatmap_name,
+            "heatmap_stats": _matrix_stats(similarity_matrix),
+            "over_time_plot": over_time_name,
+        }
+
     (out_root / "report.json").write_text(json.dumps(report, indent=2))
     _render_bar_chart(result.per_body_part_score, out_root / "summary.png")
 
     if render_video:
-        _render_side_by_side_skeleton(
-            bench_smooth,
-            user_smooth,
-            result.aligned_a_idx,
-            result.aligned_b_idx,
-            severities,
-            out_root / "aligned_side.mp4",
-            fps=fps,
+        _render_side_by_side(
+            benchmark_video, user_video,
+            bench_smooth, user_smooth,
+            dtw.path, out_root / "aligned_side.mp4", fps=fps,
+            bench_fps=float(bench_meta.get("fps") or fps),
+            user_fps=float(user_meta.get("fps") or fps),
         )
-        # The real-video overlay is best-effort: if either source video is
-        # missing or unreadable (e.g. someone passed only the .pkl files
-        # with placeholder paths), skip it but keep the blank-canvas mp4.
-        if Path(benchmark_video).exists() and Path(user_video).exists():
-            try:
-                _render_side_by_side_real(
-                    benchmark_video,
-                    user_video,
-                    bench_smooth,
-                    user_smooth,
-                    result.aligned_a_idx,
-                    result.aligned_b_idx,
-                    severities,
-                    out_root / "aligned_side_real.mp4",
-                    fps=fps,
-                )
-            except RuntimeError as e:
-                print(f"warning: real-video render skipped ({e})")
 
     return out_root
 
@@ -712,52 +523,45 @@ def _main() -> None:
     p = argparse.ArgumentParser(description="End-to-end comparison report from two videos.")
     p.add_argument("--benchmark", required=True)
     p.add_argument("--user", required=True)
-    p.add_argument("--model-config", default=None)
-    p.add_argument("--ckpt", default=None)
-    p.add_argument("--bench-poses-pkl", default=None, help="AIST-style benchmark keypoints .pkl/.npy with shape (T,17,2|3)")
-    p.add_argument("--user-poses-pkl", default=None, help="AIST-style user keypoints .pkl/.npy with shape (T,17,2|3)")
+    p.add_argument("--model-config", required=True)
+    p.add_argument("--ckpt", required=True)
     p.add_argument("--compare-config", default="configs/data/compare.yaml")
     p.add_argument("--out", default="data/reports/run_latest")
     p.add_argument("--no-video", action="store_true")
-    p.add_argument(
-        "--alignment-method",
-        default="raw_features",
-        choices=["raw_features", "gnn_embedding"],
-        help="raw_features keeps the baseline DTW features; gnn_embedding uses PoseGNNEncoder embeddings for DTW",
-    )
-    p.add_argument(
-        "--gnn-checkpoint",
-        default=None,
-        help="PoseGNNEncoder checkpoint required when --alignment-method gnn_embedding",
-    )
+    p.add_argument("--crop-mode", choices=["detector_union", "motion"], default="detector_union")
+    p.add_argument("--detector-sample-stride", type=int, default=10)
+    p.add_argument("--detector-max-samples", type=int, default=80)
+    p.add_argument("--detector-score-threshold", type=float, default=0.7)
+    p.add_argument("--detector-pad-ratio", type=float, default=0.35)
+    p.add_argument("--detector-min-detection-rate", type=float, default=0.6)
+    p.add_argument("--detector-min-edge-margin", type=float, default=0.03)
+    p.add_argument("--detector-max-edge-contact-rate", type=float, default=0.0)
+    p.add_argument("--alignment-method", choices=["raw_features", "gnn_embedding"], default="raw_features")
+    p.add_argument("--gnn-checkpoint", default=None)
     p.add_argument("--gnn-device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
-    p.add_argument("--gnn-batch-size", default=256, type=int)
-    p.add_argument(
-        "--embedding-score-weight",
-        default=0.4,
-        type=float,
-        help=(
-            "weight of the GNN embedding similarity in the combined score; "
-            "the geometry score gets weight (1 - this). Only used when "
-            "--alignment-method gnn_embedding. Default 0.4."
-        ),
-    )
+    p.add_argument("--embedding-score-weight", type=float, default=None)
     args = p.parse_args()
     if args.alignment_method == "gnn_embedding" and not args.gnn_checkpoint:
         p.error("--gnn-checkpoint is required when --alignment-method gnn_embedding")
-    if (not args.bench_poses_pkl or not args.user_poses_pkl) and (not args.model_config or not args.ckpt):
-        p.error("--model-config and --ckpt are required for any video without --*-poses-pkl")
+    detector_kwargs = {
+        "detector_sample_stride": args.detector_sample_stride,
+        "detector_max_samples": args.detector_max_samples,
+        "detector_score_threshold": args.detector_score_threshold,
+        "detector_pad_ratio": args.detector_pad_ratio,
+        "detector_min_detection_rate": args.detector_min_detection_rate,
+        "detector_min_edge_margin": args.detector_min_edge_margin,
+        "detector_max_edge_contact_rate": args.detector_max_edge_contact_rate,
+    }
     out = run(
         args.benchmark, args.user,
         args.model_config, args.ckpt,
         args.compare_config, args.out,
         render_video=not args.no_video,
+        crop_mode=args.crop_mode,
+        detector_kwargs=detector_kwargs,
         alignment_method=args.alignment_method,
         gnn_checkpoint=args.gnn_checkpoint,
         gnn_device=args.gnn_device,
-        gnn_batch_size=args.gnn_batch_size,
-        bench_poses_pkl=args.bench_poses_pkl,
-        user_poses_pkl=args.user_poses_pkl,
         embedding_score_weight=args.embedding_score_weight,
     )
     print(f"report written to {out}")

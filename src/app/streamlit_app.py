@@ -45,16 +45,8 @@ report = json.loads((run_dir / "report.json").read_text())
 
 col_top = st.columns(2)
 with col_top[0]:
-    overall_score = report.get("overall_score", report["scores"]["overall_score"])
-    pose_geometry_score = report.get("pose_geometry_score", report["scores"]["pose_geometry_score"])
-    raw_overall_score = report.get("raw_overall_score", report["scores"]["overall_score"])
-    embedding_score = report.get("embedding_similarity_score")
-    st.metric("Overall score", f"{overall_score:.1f} / 100")
-    st.metric("Pose geometry", f"{pose_geometry_score:.1f}")
-    if raw_overall_score != overall_score:
-        st.metric("Raw overall", f"{raw_overall_score:.1f}")
-    if embedding_score is not None:
-        st.metric("Embedding", f"{embedding_score:.1f}")
+    st.metric("Overall score", f"{report['scores']['overall_score']:.1f} / 100")
+    st.metric("Pose geometry", f"{report['scores']['pose_geometry_score']:.1f}")
     st.metric("Limb angles", f"{report['scores']['limb_angle_score']:.1f}")
     st.metric("Timing", f"{report['scores']['timing_score']:.1f}")
 with col_top[1]:

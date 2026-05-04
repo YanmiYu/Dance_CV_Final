@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import pickle
 from pathlib import Path
 
 import numpy as np
@@ -30,13 +29,16 @@ def _write_cached_pose(run_dir: Path, name: str, poses: np.ndarray) -> None:
     pred.mkdir(parents=True)
     np.save(pred / "poses.npy", poses)
     (pred / "meta.json").write_text(
-        json.dumps({"fps": 30.0, "num_frames": int(poses.shape[0]), "width": 640, "height": 480})
+        json.dumps(
+            {
+                "fps": 30.0,
+                "num_frames": int(poses.shape[0]),
+                "width": 640,
+                "height": 480,
+                "crop_mode": "detector_union",
+            }
+        )
     )
-
-
-def _write_pose_pkl(path: Path, poses: np.ndarray) -> None:
-    with path.open("wb") as f:
-        pickle.dump({"keypoints2d": poses}, f)
 
 
 def _write_compare_config(path: Path) -> None:
@@ -92,43 +94,16 @@ def test_render_report_raw_features_smoke(tmp_path: Path) -> None:
         render_video=False,
     )
     report = json.loads((out / "report.json").read_text())
-    assert report["alignment"]["method"] == "raw_features"
-    assert report["alignment"]["feature_shape_benchmark"][0] == 40
-    assert report["raw_overall_score"] == pytest.approx(report["scores"]["overall_score"])
-    assert report["pose_geometry_score"] == pytest.approx(report["scores"]["pose_geometry_score"])
+    assert set(report) == {
+        "benchmark_video",
+        "user_video",
+        "fps_used_for_timing",
+        "dtw",
+        "scores",
+        "feedback",
+    }
     assert "scores" in report
-
-
-def test_render_report_loads_pose_pkls_without_detector_config(tmp_path: Path) -> None:
-    from src.compare.render_report import run
-
-    run_dir = tmp_path / "report"
-    cfg = tmp_path / "compare.yaml"
-    _write_compare_config(cfg)
-    bench_pkl = tmp_path / "bench.pkl"
-    user_pkl = tmp_path / "user.pkl"
-    _write_pose_pkl(bench_pkl, _make_seq(40, phase=0.0))
-    _write_pose_pkl(user_pkl, _make_seq(38, phase=0.1))
-
-    out = run(
-        "benchmark.mp4",
-        "user.mp4",
-        None,
-        None,
-        str(cfg),
-        str(run_dir),
-        render_video=False,
-        bench_poses_pkl=str(bench_pkl),
-        user_poses_pkl=str(user_pkl),
-    )
-
-    bench_meta = json.loads((out / "benchmark_pose" / "meta.json").read_text())
-    user_meta = json.loads((out / "user_pose" / "meta.json").read_text())
-    report = json.loads((out / "report.json").read_text())
-    assert bench_meta["source"] == "keypoints_file"
-    assert user_meta["source"] == "keypoints_file"
-    assert np.load(out / "benchmark_pose" / "poses.npy").shape == (40, 17, 3)
-    assert report["alignment"]["feature_shape_benchmark"][0] == 40
+    assert "embedding" not in report
 
 
 def test_render_report_gnn_embedding_smoke(tmp_path: Path) -> None:
@@ -153,12 +128,19 @@ def test_render_report_gnn_embedding_smoke(tmp_path: Path) -> None:
         gnn_device="cpu",
     )
     report = json.loads((out / "report.json").read_text())
-    assert report["alignment"]["method"] == "gnn_embedding"
-    assert report["alignment"]["feature_shape_benchmark"] == [40, 128]
-    assert report["alignment"]["feature_shape_user"] == [38, 128]
-    assert report["alignment"]["embedding_dim"] == 128
-    assert report["raw_overall_score"] == pytest.approx(report["scores"]["overall_score"])
-    assert report["pose_geometry_score"] == pytest.approx(report["scores"]["pose_geometry_score"])
-    assert report["embedding_similarity_heatmap"] == "embedding_similarity_heatmap.png"
+    assert set(report) == {
+        "benchmark_video",
+        "user_video",
+        "fps_used_for_timing",
+        "dtw",
+        "scores",
+        "feedback",
+        "embedding",
+    }
+    assert report["embedding"]["alignment_method"] == "gnn_embedding"
+    assert report["embedding"]["embedding_dim"] == 128
+    assert report["embedding"]["heatmap"] == "embedding_similarity_heatmap.png"
+    assert report["embedding"]["over_time_plot"] == "embedding_similarity_over_time.png"
     assert (out / "embedding_similarity_heatmap.png").exists()
-    assert report["embedding_similarity_heatmap_stats"]["shape"] == [40, 38]
+    assert (out / "embedding_similarity_over_time.png").exists()
+    assert report["embedding"]["heatmap_stats"]["shape"] == [40, 38]
