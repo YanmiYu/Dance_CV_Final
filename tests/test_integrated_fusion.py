@@ -61,8 +61,50 @@ def test_fuse_combines_keypoint_lstm_and_embedding_streams(tmp_path: Path) -> No
     assert "hrnet" in result.per_model_part_probs
     assert "gnn" in result.per_model_cosine
     assert result.intervals
+    assert result.score_breakdown["overall"] == result.overall_score
+    assert set(result.per_body_part_score) == {
+        "LEFT_ARM",
+        "RIGHT_ARM",
+        "LEFT_LEG",
+        "RIGHT_LEG",
+        "TORSO",
+        "HEAD",
+    }
+    assert all(0.0 <= score <= 100.0 for score in result.per_body_part_score.values())
+    assert min(result.per_body_part_score, key=result.per_body_part_score.get) == "LEFT_ARM"
+    assert result.model_similarity_score["gnn"] <= 100.0
+    assert result.timeline_windows
+    assert result.coaching_report["improvement_priorities"]
+    assert "What Went Well" in result.markdown_report
+    assert "Practice Plan" in result.markdown_report
 
     curve_path = tmp_path / "report_curves.png"
     _write_curve_plot(curve_path, result)
     assert curve_path.exists()
     assert curve_path.stat().st_size > 0
+
+
+def test_fuse_rich_report_handles_clean_runs() -> None:
+    timestamps = np.linspace(0.0, 1.0, 12, dtype=np.float32)
+    part_signal = np.zeros((12, 6), dtype=np.float32)
+    stream = KeypointStream(
+        name="hrnet",
+        bench_aligned=np.zeros((12, 17, 3), dtype=np.float32),
+        user_aligned=np.zeros((12, 17, 3), dtype=np.float32),
+        path=[(i, i) for i in range(12)],
+        timestamps=timestamps,
+        part_signal=part_signal,
+        part_probs=np.zeros((12, 6), dtype=np.float32),
+        cosine_sim=np.ones((12,), dtype=np.float32),
+        fps=12.0,
+    )
+
+    result = fuse([stream], [], off_threshold=0.5)
+
+    assert not result.intervals
+    assert result.score_breakdown["interval_count"] == 0
+    assert result.score_breakdown["total_off_pose_time_s"] == 0.0
+    assert result.overall_score > 95.0
+    assert result.coaching_report["strengths"]
+    assert result.coaching_report["practice_plan"]
+    assert "No sustained off-pose moments" in result.coaching_report["timestamped_feedback"][0]

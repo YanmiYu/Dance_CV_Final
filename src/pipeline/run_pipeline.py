@@ -18,6 +18,7 @@ import yaml
 from src.error import embedding_stream as emb_stream
 from src.error import keypoint_stream as kp_stream
 from src.fusion.fuse import FusionResult, fuse
+from src.fusion.reporting import format_coaching_markdown
 from src.pose import gnn_adapter, hrnet_adapter, simple_baseline_adapter
 from src.pose.base import PoseRunResult
 from src.utils.video import write_video
@@ -228,17 +229,35 @@ def run(
     )
 
     # 4. Persist.
-    (out / "report.md").write_text(result.markdown_report)
     lstm_streams = sorted(result.per_model_part_probs.keys())
     lstm_status = {
         **lstm_status,
         "used": bool(lstm_streams),
         "streams": lstm_streams,
     }
+    markdown_report = format_coaching_markdown(
+        overall_score=result.overall_score,
+        report_sections={
+            "score_breakdown": result.score_breakdown,
+            "per_body_part_score": result.per_body_part_score,
+            "coaching_report": result.coaching_report,
+        },
+        intervals=result.intervals,
+        models_enabled=list(upstream.keys()),
+        lstm_status=lstm_status,
+    )
+    (out / "report.md").write_text(markdown_report)
     report_json = {
+        "report_version": 2,
         "overall_score": result.overall_score,
         "intervals": [asdict(iv) for iv in result.intervals],
         "feedback": result.feedback,
+        "score_breakdown": result.score_breakdown,
+        "per_body_part_score": result.per_body_part_score,
+        "per_body_part_off_mean": result.per_body_part_off_mean,
+        "model_similarity_score": result.model_similarity_score,
+        "timeline_windows": result.timeline_windows,
+        "coaching_report": result.coaching_report,
         "fps": result.fps,
         "canonical_stream": result.extra.get("canonical_stream"),
         "curve_png": "report_curves.png",
