@@ -20,6 +20,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from src.utils.checkpoints import torch_load_checkpoint
+
 from src.mia.dataset import FEATURE_DIM, N_PARTS
 
 
@@ -96,10 +98,7 @@ def _torch_load(path: str | Path, device: str) -> Any:
     Newer PyTorch releases support ``weights_only=True``. Older ones do not,
     so keep a small fallback for shared lab environments.
     """
-    try:
-        return torch.load(str(path), map_location=device, weights_only=True)
-    except TypeError:  # pragma: no cover - depends on installed torch version
-        return torch.load(str(path), map_location=device)
+    return torch_load_checkpoint(path, map_location=device)
 
 
 def _strip_module_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 from src.models.pose_gnn import PoseGNNEncoder
+from src.utils.checkpoints import torch_load_checkpoint
 
 
 def select_torch_device(name: str = "auto") -> torch.device:
@@ -36,7 +37,7 @@ def load_pose_gnn_encoder(
 ) -> Tuple[PoseGNNEncoder, torch.device]:
     """Load a ``PoseGNNEncoder`` checkpoint and return ``(model, device)``."""
     device_t = select_torch_device(device) if isinstance(device, str) else device
-    ckpt = torch.load(checkpoint_path, map_location=device_t)
+    ckpt = torch_load_checkpoint(checkpoint_path, map_location=device_t)
     state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
     embedding_dim = int(ckpt.get("embedding_dim", 128)) if isinstance(ckpt, dict) else 128
 

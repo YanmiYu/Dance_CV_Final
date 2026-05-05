@@ -41,3 +41,19 @@ def test_internal_checkpoint_guard_rejects_external_path(tmp_path: Path) -> None
 
     with pytest.raises(AssertionError):
         _load_state_from_internal_ckpt(torch.nn.Linear(1, 1), str(tmp_path / "external.pt"))
+
+
+def test_internal_checkpoint_loader_rejects_git_lfs_pointer(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    from src.train.engine import _load_state_from_internal_ckpt
+
+    ckpt_path = tmp_path / "data" / "processed" / "model" / "best.pt"
+    ckpt_path.parent.mkdir(parents=True)
+    ckpt_path.write_text(
+        "version https://git-lfs.github.com/spec/v1\n"
+        "oid sha256:0123456789abcdef\n"
+        "size 123\n"
+    )
+
+    with pytest.raises(RuntimeError, match="Git LFS pointer"):
+        _load_state_from_internal_ckpt(torch.nn.Linear(1, 1), str(ckpt_path))

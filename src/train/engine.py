@@ -21,6 +21,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
+from src.utils.checkpoints import torch_load_checkpoint
+
 
 def _to_tensor(v):
     if isinstance(v, np.ndarray):
@@ -184,7 +186,7 @@ def _load_state_from_internal_ckpt(model: nn.Module, path: str) -> None:
         f"init_from must point INSIDE data/processed/ (ours). Got: {path}. "
         f"See docs/project_decisions.md section 1."
     )
-    state = torch.load(path, map_location="cpu")
+    state = torch_load_checkpoint(path, map_location="cpu")
     if isinstance(state, dict) and "model" in state:
         state = state["model"]
     elif isinstance(state, dict) and "state_dict" in state:

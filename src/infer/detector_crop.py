@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 import os
 from pathlib import Path
 from typing import Iterable, List, Optional, Protocol, Sequence, Tuple
+import warnings
 
 import cv2
 import numpy as np
@@ -455,9 +456,29 @@ def build_person_detector(
     if backend in {"torchvision", "fasterrcnn", "fasterrcnn_resnet50_fpn_v2"}:
         return TorchVisionPersonDetector(score_threshold=score_threshold, device=device)
     if backend in {"yolo", "yolov8", "ultralytics"}:
-        return YOLOv8PersonDetector(
-            score_threshold=score_threshold,
-            device=device,
-            model_name=model_name or "yolov8n.pt",
-        )
+        try:
+            return YOLOv8PersonDetector(
+                score_threshold=score_threshold,
+                device=device,
+                model_name=model_name or "yolov8n.pt",
+            )
+        except RuntimeError as yolo_error:
+            try:
+                fallback = TorchVisionPersonDetector(
+                    score_threshold=score_threshold,
+                    device=device,
+                )
+            except RuntimeError as torchvision_error:
+                raise RuntimeError(
+                    "Could not initialize YOLOv8 detector, and the torchvision "
+                    "fallback also failed. YOLOv8 error: "
+                    f"{yolo_error}. TorchVision error: {torchvision_error}"
+                ) from torchvision_error
+            warnings.warn(
+                "YOLOv8 detector unavailable; falling back to torchvision "
+                f"person detector. Original error: {yolo_error}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return fallback
     raise ValueError(f"Unknown detector backend: {backend!r}")
