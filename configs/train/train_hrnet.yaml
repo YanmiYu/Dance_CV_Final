@@ -1,0 +1,42 @@
+decisions_ref: docs/project_decisions.md
+
+# HRNet-W32 pose training: ImageNet-pretrained backbone + random head,
+# fine-tuned end-to-end on AIST++ with differential LR.
+# See docs/project_decisions.md section 1 (2026-05-04 revision).
+
+stage: hrnet_aist_only
+data_config: configs/data/pose_train.yaml
+model_config: configs/model/hrnet_w32.yaml
+output_dir: data/processed/train_hrnet_w32
+
+dataset_mix:
+  aistpp: 1.0
+
+epochs: 50
+batch_size: 16
+num_workers: 6
+optimizer:
+  name: adamw
+  weight_decay: 1.0e-4
+  param_groups:
+    backbone:
+      lr: 1.0e-4
+      modules: [stem, stage1, trans_12, stage2, trans_23, stage3, trans_34, stage4]
+    head:
+      lr: 1.0e-3
+      modules: [head]
+scheduler:
+  name: cosine
+  warmup_epochs: 5
+  min_lr: 1.0e-6
+
+loss:
+  name: joint_mse_with_visibility
+  use_target_weight: true
+
+eval_every_n_epochs: 2
+save_every_n_epochs: 5
+log_every_n_steps: 50
+
+resume_from: null
+init_from: null

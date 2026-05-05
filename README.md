@@ -1,16 +1,99 @@
 # CV Tool for Dance Choreography Practice
 
 A computer-vision tool for comparing a student's dance imitation against a
-reference benchmark clip, trained entirely from scratch (no pretrained
-weights) on the AIST dance clips in `data/raw_videos/` supervised by
-AIST++ 2D keypoints. The system extracts a single-person 2D pose per
-frame, temporally smooths it, aligns the benchmark and imitation with
-DTW, and produces interpretable per-body-part / per-time-window scores
-plus human-readable feedback.
+reference benchmark clip. The local training pipeline uses AIST dance clips in
+`data/raw_videos/` supervised by AIST++ 2D keypoints; the HRNet branch may
+initialize its backbone from the whitelisted ImageNet checkpoint documented in
+`docs/project_decisions.md`, and the integrated SimpleBaseline checkpoint is an
+imported artifact from `simple-baseline-lynn`. The system extracts single-person
+2D pose per frame, aligns the benchmark and imitation with DTW, and produces
+interpretable per-body-part / per-time-window scores plus human-readable
+feedback.
+
+## Integrated pipeline (this branch)
+
+This `integrate` branch wires four components developed on separate
+branches into a single end-to-end pipeline:
+
+- HRNet-W32 pose estimator (`max` branch)
+- SimpleBaseline pose estimator (`simple-baseline-lynn` branch)
+- GNN pose-encoder for embedding-space similarity (`stevenmerge` branch)
+- LSTM temporal error detector + scoring + feedback (`Mia` branch)
+
+The default preprocessing stage uses YOLOv8 person detection for a stable
+full-body crop, matching the project pipeline diagram. Set
+`preprocessing.detector_backend: torchvision` in
+[`configs/integrate/pipeline.yaml`](configs/integrate/pipeline.yaml) to use the
+older detector wrapper.
+
+Run on a benchmark / learner pair:
+
+```bash
+python run.py \
+    --benchmark data/raw_videos/<bench>.mp4 \
+    --learner   data/raw_videos/<user>.mp4 \
+    --out       results/integrate_run/
+```
+
+Outputs in `--out`:
+
+- `report.md`     — human-readable score + timestamped feedback
+- `report.json`   — overall score, intervals, fusion params, models used
+- `report_curves.png` — similarity / confidence curve with error windows
+- `streams.npz`   — per-model error / similarity curves on the canonical time axis
+
+Configure which models/heads run via [`configs/integrate/pipeline.yaml`](configs/integrate/pipeline.yaml).
+Default config: HRNet + SimpleBaseline + GNN enabled; the Mia LSTM head is
+enabled when `checkpoints/lstm/best_model.pt` exists and otherwise falls back
+to the geometric threshold head. The SimpleBaseline config preserves the
+`simple-baseline-lynn` inference contract: direct bbox-resize crops, RGB channel
+order, and ImageNet normalization.
+
+Required local artifacts:
+
+| Path                                                | Source                       |
+| --------------------------------------------------- | ---------------------------- |
+| `data/processed/train_hrnet_w32/best.pt`            | trained on `max` branch      |
+| `data/processed/simple_baseline/best.pt`            | ported from `simple-baseline-lynn` |
+| `checkpoints/pose_gnn_encoder_oscar.pt`             | committed by `stevenmerge`   |
+| `checkpoints/lstm/best_model.pt` (optional)         | drop Mia LSTM ckpt to enable |
+| `data/external/pretrained/hrnetv2_w32_imagenet.pth` | `python scripts/download_hrnet_imagenet.py` |
+
+Use an explicit Mia checkpoint without editing YAML:
+
+```bash
+python run.py \
+    --benchmark data/raw_videos/<bench>.mp4 \
+    --learner   data/raw_videos/<user>.mp4 \
+    --out       results/integrate_lstm_run/ \
+    --lstm-checkpoint checkpoints/lstm/best_model.pt \
+    --require-lstm
+```
+
+Build/train/evaluate the LSTM head inside the integrated repo:
+
+```bash
+python scripts/build_lstm_dataset.py \
+    --kp-dir data/keypoints \
+    --out-train data/lstm/train \
+    --out-val data/lstm/val \
+    --out-test data/lstm/test
+
+python -m src.mia.train \
+    --train-dir data/lstm/train \
+    --val-dir data/lstm/val \
+    --checkpoint checkpoints/lstm/best_model.pt
+
+python -m src.mia.evaluate \
+    --test-dir data/lstm/test \
+    --checkpoint checkpoints/lstm/best_model.pt
+```
+
+
 
 **Read `docs/project_decisions.md` before touching anything.** All scope
-decisions (e.g. no pretrained models, COCO-17 joints, upper-body weighting)
-are frozen there.
+decisions (COCO-17 joints, the HRNet backbone exception, detector-only crop
+usage, upper-body weighting) are frozen there.
 
 ## Repository layout
 
@@ -29,6 +112,11 @@ src/
   train/            # training engine, metrics, eval
   infer/            # motion crop, video pose inference, temporal smoothing
   compare/          # normalize, features, DTW, score, feedback, report
+  pose/             # integrated adapters for HRNet, SimpleBaseline, GNN
+  error/            # per-model keypoint and embedding error streams
+  fusion/           # final score / interval fusion
+  mia/              # namespaced LSTM temporal error detector utilities
+  pipeline/         # end-to-end integrated runner
   app/              # Streamlit demo (built last)
   utils/            # io, video, viz, seed, config
 tests/              # unit + smoke tests
@@ -48,6 +136,7 @@ pip install -r requirements.txt
 
 ```bash
 pytest -q
+python run.py --help
 python -m src.train.train_pose --help
 python -m src.infer.run_pose_on_video --help
 ```
@@ -93,7 +182,8 @@ python -m src.train.train_pose --train configs/train/train.yaml
 
 ## What this project will NOT do (v1)
 
-- No pretrained weights anywhere.
+- No pretrained pose/keypoint weights, except the documented HRNet ImageNet
+  backbone initialization.
 - No multi-person / moving-camera pose estimation.
 - No transformer as the first model.
 - No UI before the CLI pipeline works.

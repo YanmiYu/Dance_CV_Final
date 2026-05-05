@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(git lfs *)",
+      "Bash(md5 data/processed/train_hrnet_w32/last.pt data/processed/train_hrnet_w32/epoch_0050.pt)",
+      "Bash(.venv/bin/python --version)",
+      "Bash(.venv/bin/python -c \"import torch, numpy, scipy, fastdtw, yaml, cv2; print\\('torch', torch.__version__, 'numpy', numpy.__version__\\)\")",
+      "Bash(.venv/bin/python -c \"import torch, numpy, scipy, yaml, cv2; print\\('torch', torch.__version__\\)\")",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python -c \"import fastdtw; print\\('fastdtw OK'\\)\")",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,nb_frames -of csv=p=0 data/raw_videos/gBR_sBM_c01_d04_mBR0_ch01.mp4)"
+    ]
+  }
+}

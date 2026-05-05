@@ -4,8 +4,9 @@ This module wraps the numpy-returning dataset in a ``torch.utils.data.Dataset``
 adapter, builds the model/optimizer/scheduler, and runs the train/eval loops.
 
 Key rule: ``init_from`` may ONLY point at checkpoints WE have produced inside
-``data/processed/stage_*``. No external pretrained weights.
-See ``docs/project_decisions.md``.
+``data/processed/``. HRNet is the one exception allowed to load an ImageNet
+classification backbone via ``pretrained_backbone_path``; the pose head stays
+random. See ``docs/project_decisions.md``.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
+
+from src.utils.checkpoints import torch_load_checkpoint
 
 
 def _to_tensor(v):
@@ -70,6 +73,11 @@ def build_model(model_config: Dict) -> nn.Module:
         raise ValueError(
             "pretrained=true is forbidden. See docs/project_decisions.md section 1."
         )
+    if model_config.get("pretrained_backbone_path") and name != "hrnet_w32":
+        raise ValueError(
+            f"pretrained_backbone_path is only supported for hrnet_w32, not {name!r}. "
+            "See docs/project_decisions.md section 1."
+        )
     if name == "simple_baseline":
         from src.models.simple_baseline import SimpleBaselinePose
         return SimpleBaselinePose(model_config)
@@ -79,16 +87,52 @@ def build_model(model_config: Dict) -> nn.Module:
     raise ValueError(f"Unknown model name: {name!r}")
 
 
+def _build_param_groups(model: nn.Module, groups_cfg: Dict) -> list[Dict]:
+    """Resolve named optimizer groups and require full parameter coverage."""
+    groups: list[Dict] = []
+    seen_ids: set[int] = set()
+    total_assigned = 0
+    for group_name, group_cfg in groups_cfg.items():
+        params: list[torch.nn.Parameter] = []
+        for module_name in group_cfg["modules"]:
+            module = getattr(model, module_name)
+            for param in module.parameters():
+                if id(param) in seen_ids:
+                    raise ValueError(
+                        f"Parameter from module {module_name!r} "
+                        f"(group {group_name!r}) is assigned to two groups."
+                    )
+                seen_ids.add(id(param))
+                params.append(param)
+                total_assigned += param.numel()
+        groups.append({"params": params, "lr": float(group_cfg["lr"]), "name": group_name})
+
+    total_model = sum(param.numel() for param in model.parameters())
+    if total_assigned != total_model:
+        raise ValueError(
+            f"param_groups cover {total_assigned} params but model has {total_model}. "
+            "Every parameter must belong to exactly one group."
+        )
+    return groups
+
+
 def build_optimizer(model: nn.Module, optim_cfg: Dict) -> torch.optim.Optimizer:
     name = optim_cfg.get("name", "adamw").lower()
-    lr = float(optim_cfg.get("lr", 3e-4))
     wd = float(optim_cfg.get("weight_decay", 1e-4))
+
+    groups_cfg = optim_cfg.get("param_groups")
+    if groups_cfg:
+        params = _build_param_groups(model, groups_cfg)
+    else:
+        lr = float(optim_cfg.get("lr", 3e-4))
+        params = [{"params": list(model.parameters()), "lr": lr}]
+
     if name == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+        return torch.optim.AdamW(params, weight_decay=wd)
     if name == "adam":
-        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+        return torch.optim.Adam(params, weight_decay=wd)
     if name == "sgd":
-        return torch.optim.SGD(model.parameters(), lr=lr, weight_decay=wd, momentum=0.9)
+        return torch.optim.SGD(params, weight_decay=wd, momentum=0.9)
     raise ValueError(f"Unknown optimizer: {name!r}")
 
 
@@ -98,18 +142,23 @@ def build_scheduler(optim, sched_cfg: Dict, total_epochs: int):
     min_lr = float(sched_cfg.get("min_lr", 1e-6))
     base_lrs = [g["lr"] for g in optim.param_groups]
 
-    def _lr_lambda(epoch: int) -> float:
-        if epoch < warmup:
-            return (epoch + 1) / max(warmup, 1)
-        if name == "cosine":
-            progress = (epoch - warmup) / max(total_epochs - warmup, 1)
-            scale = 0.5 * (1 + math.cos(math.pi * progress))
-            return max(scale + (min_lr / base_lrs[0]) * (1 - scale), min_lr / base_lrs[0])
-        if name == "constant":
-            return 1.0
-        return 1.0
+    def _make_lambda(base_lr: float):
+        floor = min_lr / base_lr
 
-    return torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=_lr_lambda)
+        def _lr_lambda(epoch: int) -> float:
+            if epoch < warmup:
+                return (epoch + 1) / max(warmup, 1)
+            if name == "cosine":
+                progress = min((epoch - warmup) / max(total_epochs - warmup, 1), 1.0)
+                scale = 0.5 * (1 + math.cos(math.pi * progress))
+                return max(scale + floor * (1 - scale), floor)
+            if name == "constant":
+                return 1.0
+            return 1.0
+
+        return _lr_lambda
+
+    return torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=[_make_lambda(lr) for lr in base_lrs])
 
 
 @dataclass
@@ -137,9 +186,16 @@ def _load_state_from_internal_ckpt(model: nn.Module, path: str) -> None:
         f"init_from must point INSIDE data/processed/ (ours). Got: {path}. "
         f"See docs/project_decisions.md section 1."
     )
-    state = torch.load(path, map_location="cpu")
+    state = torch_load_checkpoint(path, map_location="cpu")
     if isinstance(state, dict) and "model" in state:
         state = state["model"]
+    elif isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    if isinstance(state, dict):
+        state = {
+            (key.removeprefix("module.") if isinstance(key, str) else key): value
+            for key, value in state.items()
+        }
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
         print(f"[init_from] missing keys (ok if architecture differs slightly): {len(missing)}")
@@ -156,6 +212,11 @@ def make_train_ctx(
 
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(model_cfg).to(device)
+
+    if (backbone_path := model_cfg.get("pretrained_backbone_path")):
+        from src.models.hrnet_pretrained import load_hrnet_imagenet_backbone
+
+        load_hrnet_imagenet_backbone(model, backbone_path)
 
     if (init_from := train_cfg.get("init_from")):
         _load_state_from_internal_ckpt(model, init_from)

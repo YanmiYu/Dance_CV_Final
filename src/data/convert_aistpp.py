@@ -62,12 +62,17 @@ def convert_video(
     mapping: tuple = _DEFAULT_AISTPP_TO_COCO17,
     image_width: Optional[int] = None,
     image_height: Optional[int] = None,
+    require_frame_exists: bool = False,
 ) -> None:
     """Append rows for one (video, camera) pair to ``out_rows``.
 
     ``kps_file`` may be:
       * a ``.pkl`` with key ``keypoints2d`` of shape (T, 17, 2) or (T, 17, 3)
       * a numpy ``.npy`` of the same shape
+
+    When ``require_frame_exists`` is true, rows whose extracted frame JPG is
+    missing are skipped. This keeps generated labels aligned with videos whose
+    AIST++ keypoint sequence is slightly longer than the decoded video.
     """
     kps_file = Path(kps_file)
     if kps_file.suffix == ".npy":
@@ -123,6 +128,9 @@ def convert_video(
         bbox = _bbox_from_keypoints(xy[inside] if inside.any() else xy)
         center, scale = bbox_to_center_scale(bbox, aspect_ratio=aspect_ratio)
         frame_path = frames_dir / f"{Path(video_path).stem}_{t:06d}.jpg"
+        if require_frame_exists and not frame_path.exists():
+            continue
+
         rec = AnnotationRecord(
             image_path=str(frame_path),
             image_id=f"aistpp_{Path(video_path).stem}_{t:06d}",
@@ -148,6 +156,7 @@ def _main() -> None:
     p.add_argument("--frame-stride", type=int, default=8)
     p.add_argument("--image-width", type=int, default=None)
     p.add_argument("--image-height", type=int, default=None)
+    p.add_argument("--require-frame-exists", action="store_true")
     p.add_argument("--input-size", nargs=2, type=int, default=[256, 192])
     args = p.parse_args()
     H, W = args.input_size
@@ -161,6 +170,7 @@ def _main() -> None:
         frame_stride=args.frame_stride,
         image_width=args.image_width,
         image_height=args.image_height,
+        require_frame_exists=args.require_frame_exists,
     )
 
     def _gen() -> Iterable[dict]:

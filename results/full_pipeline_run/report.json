@@ -1,0 +1,79 @@
+{
+  "overall_score": 56.763414760767404,
+  "intervals": [
+    {
+      "start_s": 1.4666666984558105,
+      "end_s": 1.9666666984558105,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5753883123397827
+    },
+    {
+      "start_s": 2.433333396911621,
+      "end_s": 2.9666666984558105,
+      "part": "LEFT_ARM",
+      "mean_error": 0.6026324033737183
+    },
+    {
+      "start_s": 6.5,
+      "end_s": 6.766666889190674,
+      "part": "LEFT_ARM",
+      "mean_error": 0.616148054599762
+    },
+    {
+      "start_s": 7.699999809265137,
+      "end_s": 8.133333206176758,
+      "part": "RIGHT_LEG",
+      "mean_error": 0.5483191013336182
+    },
+    {
+      "start_s": 10.866666793823242,
+      "end_s": 11.366666793823242,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5609527826309204
+    },
+    {
+      "start_s": 12.033333778381348,
+      "end_s": 12.100000381469727,
+      "part": "LEFT_ARM",
+      "mean_error": 0.54095858335495
+    },
+    {
+      "start_s": 12.033333778381348,
+      "end_s": 12.100000381469727,
+      "part": "RIGHT_ARM",
+      "mean_error": 0.5291846990585327
+    }
+  ],
+  "feedback": [
+    "At 1.5 s \u2013 2.0 s your Right Arm is significantly off (0.5 s window).",
+    "At 2.4 s \u2013 3.0 s your Left Arm is significantly off (0.5 s window).",
+    "At 6.5 s \u2013 6.8 s your Left Arm is significantly off (0.3 s window).",
+    "At 7.7 s \u2013 8.1 s your Right Leg is significantly off (0.4 s window).",
+    "At 10.9 s \u2013 11.4 s your Right Arm is significantly off (0.5 s window).",
+    "At 12.0 s \u2013 12.1 s your Left Arm is significantly off (0.1 s window).",
+    "At 12.0 s \u2013 12.1 s your Right Arm is significantly off (0.1 s window)."
+  ],
+  "fps": 30.0,
+  "canonical_stream": "simple_baseline",
+  "curve_png": "report_curves.png",
+  "fusion_params": {
+    "geom_threshold": 0.25,
+    "off_threshold": 0.5,
+    "similarity_weight": 0.4,
+    "min_duration_s": 0.5
+  },
+  "models_enabled": [
+    "hrnet",
+    "simple_baseline",
+    "gnn"
+  ],
+  "lstm_used": false,
+  "lstm": {
+    "enabled": false,
+    "checkpoint": "checkpoints/lstm/best_model.pt",
+    "checkpoint_exists": false,
+    "required": false,
+    "used": false,
+    "streams": []
+  }
+}

@@ -127,6 +127,7 @@ def prepare(
             frame_stride=frame_stride,
             image_width=meta.width or None,
             image_height=meta.height or None,
+            require_frame_exists=True,
         )
 
         target = val_rows if _is_val(stem, val_fraction, split_seed) else train_rows
