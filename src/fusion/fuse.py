@@ -23,8 +23,8 @@ import numpy as np
 
 from src.error.embedding_stream import EmbeddingStream
 from src.error.keypoint_stream import KeypointStream
+from src.fusion.reporting import build_coaching_sections, format_coaching_markdown
 from src.mia.dataset import PART_ORDER
-from src.mia.feedback import format_report, generate_feedback
 from src.mia.scoring import Interval, find_off_moments
 
 
@@ -42,6 +42,12 @@ class FusionResult:
     per_model_part_probs: dict[str, np.ndarray]  # name -> (T', 6) on canonical axis (LSTM only)
     per_model_cosine: dict[str, np.ndarray]      # name -> (T',) on canonical axis
     fps: float
+    score_breakdown: dict = field(default_factory=dict)
+    per_body_part_score: dict[str, float] = field(default_factory=dict)
+    per_body_part_off_mean: dict[str, float] = field(default_factory=dict)
+    model_similarity_score: dict[str, float] = field(default_factory=dict)
+    timeline_windows: list[dict] = field(default_factory=list)
+    coaching_report: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
 
 
@@ -178,8 +184,30 @@ def fuse(
     )
     overall_score = float(max(0.0, min(100.0, (1.0 - weighted_off) * 100.0)))
 
-    feedback_lines = generate_feedback(intervals)
-    markdown = format_report(overall_score, intervals, feedback_lines)
+    extra = {
+        "canonical_stream": canonical.name,
+        "geom_threshold": geom_threshold,
+        "off_threshold": off_threshold,
+        "similarity_weight": similarity_weight,
+        "min_duration_s": min_duration_s,
+    }
+    report_sections = build_coaching_sections(
+        overall_score=overall_score,
+        intervals=intervals,
+        time_axis=time_axis,
+        final_off=final_off,
+        sim_avg=sim_avg,
+        part_probs_avg=part_probs_avg,
+        per_model_cosine=per_model_cosine,
+        fps=canonical.fps,
+        extra=extra,
+    )
+    feedback_lines = report_sections["coaching_report"]["timestamped_feedback"]
+    markdown = format_coaching_markdown(
+        overall_score=overall_score,
+        report_sections=report_sections,
+        intervals=intervals,
+    )
 
     return FusionResult(
         overall_score=overall_score,
@@ -194,11 +222,11 @@ def fuse(
         per_model_part_probs=per_model_part_probs,
         per_model_cosine=per_model_cosine,
         fps=canonical.fps,
-        extra={
-            "canonical_stream": canonical.name,
-            "geom_threshold": geom_threshold,
-            "off_threshold": off_threshold,
-            "similarity_weight": similarity_weight,
-            "min_duration_s": min_duration_s,
-        },
+        score_breakdown=report_sections["score_breakdown"],
+        per_body_part_score=report_sections["per_body_part_score"],
+        per_body_part_off_mean=report_sections["per_body_part_off_mean"],
+        model_similarity_score=report_sections["model_similarity_score"],
+        timeline_windows=report_sections["timeline_windows"],
+        coaching_report=report_sections["coaching_report"],
+        extra=extra,
     )
