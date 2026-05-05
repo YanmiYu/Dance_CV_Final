@@ -1,0 +1,33 @@
+{
+  "overall_score": 93.88817770217183,
+  "intervals": [],
+  "feedback": [
+    "Great job! No significant deviations detected."
+  ],
+  "fps": 30.0,
+  "canonical_stream": "hrnet",
+  "curve_png": "report_curves.png",
+  "fusion_params": {
+    "geom_threshold": 0.25,
+    "off_threshold": 0.5,
+    "similarity_weight": 0.4,
+    "min_duration_s": 0.5
+  },
+  "models_enabled": [
+    "hrnet",
+    "simple_baseline",
+    "gnn"
+  ],
+  "lstm_used": true,
+  "lstm": {
+    "enabled": true,
+    "checkpoint": "checkpoints/lstm/best_model.pt",
+    "checkpoint_exists": true,
+    "required": true,
+    "used": true,
+    "streams": [
+      "hrnet",
+      "simple_baseline"
+    ]
+  }
+}
