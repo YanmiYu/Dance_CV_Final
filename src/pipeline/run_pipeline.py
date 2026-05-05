@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+import cv2
 import numpy as np
 import yaml
 
@@ -19,6 +20,8 @@ from src.error import keypoint_stream as kp_stream
 from src.fusion.fuse import FusionResult, fuse
 from src.pose import gnn_adapter, hrnet_adapter, simple_baseline_adapter
 from src.pose.base import PoseRunResult
+from src.utils.video import write_video
+from src.utils.viz import draw_pose, side_by_side
 
 
 def _load_cfg(path: str) -> dict:
@@ -265,7 +268,83 @@ def run(
     np.savez(out / "streams.npz", **npz_payload)
     _write_curve_plot(out / "report_curves.png", result)
 
+    # 5. Side-by-side overlay video (HRNet skeleton preferred).
+    overlay_pair = upstream.get("hrnet")
+    if overlay_pair is None:
+        overlay_pair = next(
+            (pair for pair in upstream.values() if pair[0].poses is not None and pair[1].poses is not None),
+            None,
+        )
+    if overlay_pair is not None:
+        bench_pr, user_pr = overlay_pair
+        _render_aligned_side(
+            benchmark_video=benchmark_video,
+            learner_video=learner_video,
+            bench_poses=bench_pr.poses,
+            user_poses=user_pr.poses,
+            bench_fps=float(bench_pr.fps or 30.0),
+            user_fps=float(user_pr.fps or 30.0),
+            out_path=out / "aligned_side.mp4",
+        )
+
     return report_json
+
+
+def _render_aligned_side(
+    *,
+    benchmark_video: str,
+    learner_video: str,
+    bench_poses: np.ndarray,
+    user_poses: np.ndarray,
+    bench_fps: float,
+    user_fps: float,
+    out_path: Path,
+) -> None:
+    """Side-by-side video with skeleton overlays on a shared natural-time clock."""
+    cap_a = cv2.VideoCapture(benchmark_video)
+    cap_b = cv2.VideoCapture(learner_video)
+    try:
+        Ta = int(len(bench_poses))
+        Tb = int(len(user_poses))
+        if Ta == 0 or Tb == 0:
+            return
+        out_fps = float(min(bench_fps, user_fps) or 30.0)
+        out_duration = min(Ta / max(bench_fps, 1e-6), Tb / max(user_fps, 1e-6))
+        out_len = max(1, int(round(out_duration * out_fps)))
+
+        a_next = 0
+        b_next = 0
+        last_a = None
+        last_b = None
+        frames: list[np.ndarray] = []
+        for t in range(out_len):
+            sec = t / out_fps
+            ai = min(Ta - 1, int(round(sec * bench_fps)))
+            bi = min(Tb - 1, int(round(sec * user_fps)))
+            while a_next <= ai:
+                ok, fr = cap_a.read()
+                if not ok:
+                    break
+                last_a = fr
+                a_next += 1
+            while b_next <= bi:
+                ok, fr = cap_b.read()
+                if not ok:
+                    break
+                last_b = fr
+                b_next += 1
+            if last_a is None or last_b is None:
+                continue
+            overlay_a = draw_pose(last_a, bench_poses[ai])
+            overlay_b = draw_pose(last_b, user_poses[bi])
+            frames.append(side_by_side(overlay_a, overlay_b, label_a="benchmark", label_b="you"))
+
+        if frames:
+            h, w = frames[0].shape[:2]
+            write_video(out_path, iter(frames), fps=out_fps, size=(w, h))
+    finally:
+        cap_a.release()
+        cap_b.release()
 
 
 def _write_curve_plot(path: Path, result: FusionResult) -> None:
