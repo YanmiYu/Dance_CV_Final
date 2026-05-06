@@ -37,7 +37,7 @@ from src.utils.video import ffprobe_meta
 
 DEFAULT_BENCH_PKL = "data/labels/aistpp/keypoints2d_raw/gBR_sBM_c01_d04_mBR0_ch04.pkl"
 DEFAULT_BENCH_VIDEO = "data/videos/gBR_sBM_c01_d04_mBR0_ch04.mp4"
-DEFAULT_GNN_CKPT = "checkpoints/pose_gnn_encoder_oscar.pt"
+DEFAULT_GNN_CKPT = "checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt"
 
 DEFAULT_SAME_CHORE_PKL = "data/labels/aistpp/keypoints2d_raw/gBR_sBM_c01_d04_mBR1_ch04.pkl"
 DEFAULT_SAME_GENRE_PKL = "data/labels/aistpp/keypoints2d_raw/gBR_sBM_c01_d04_mBR1_ch05.pkl"

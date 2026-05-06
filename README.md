@@ -1,126 +1,39 @@
 # CV Tool for Dance Choreography Practice
 
 A computer-vision tool for comparing a student's dance imitation against a
-reference benchmark clip. The local training pipeline uses AIST dance clips in
-`data/raw_videos/` supervised by AIST++ 2D keypoints; the HRNet branch may
-initialize its backbone from the whitelisted ImageNet checkpoint documented in
-`docs/project_decisions.md`, and the integrated SimpleBaseline checkpoint is an
-imported artifact from `simple-baseline-lynn`. The system extracts single-person
-2D pose per frame, aligns the benchmark and imitation with DTW, and produces
+reference benchmark clip. It extracts single-person 2D pose per frame with a
+pair of pose estimators, embeds the keypoint sequence with a SupCon-trained
+graph encoder, aligns benchmark and learner via DTW, and produces
 interpretable per-body-part / per-time-window scores plus human-readable
-feedback.
+feedback. Results are viewable in a Streamlit dashboard.
 
-## Integrated pipeline (this branch)
+## Final integrated pipeline
 
-This `integrate` branch wires four components developed on separate
-branches into a single end-to-end pipeline:
+The pipeline composes five components into one run:
 
-- HRNet-W32 pose estimator (`max` branch)
-- SimpleBaseline pose estimator (`simple-baseline-lynn` branch)
-- GNN pose-encoder for embedding-space similarity (`stevenmerge` branch)
-- LSTM temporal error detector + scoring + feedback (`Mia` branch)
+- **HRNet-W32** pose estimator (final keypoint model)
+- **SimpleBaseline** pose estimator (secondary keypoint stream)
+- **SupCon GNN** pose-encoder for embedding-space similarity (final embedding model)
+- **LSTM** temporal error detector with calibrated probabilities (with a
+  geometric-threshold fallback when no LSTM checkpoint is available)
+- **Fusion / scoring / report** layer that produces JSON, Markdown, an
+  overlay video, and per-stream curves
+- **Streamlit frontend** that renders any report directory
 
-The default preprocessing stage uses YOLOv8 person detection for a stable
-full-body crop, matching the project pipeline diagram. Set
-`preprocessing.detector_backend: torchvision` in
-[`configs/integrate/pipeline.yaml`](configs/integrate/pipeline.yaml) to use the
-older detector wrapper.
+## Required checkpoints
 
-Run on a benchmark / learner pair:
+| Path | Format | Purpose |
+| ---- | ------ | ------- |
+| `data/processed/train_hrnet_w32/best.pt` | Git LFS | HRNet-W32 weights |
+| `data/processed/simple_baseline/best.pt` | Git LFS | SimpleBaseline weights |
+| `checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt` | Git (raw) | **Final SupCon GNN encoder (default)** |
+| `checkpoints/lstm/best_model.pt` | Git (raw) | Mia LSTM error detector |
 
-```bash
-python run.py \
-    --benchmark data/raw_videos/<bench>.mp4 \
-    --learner   data/raw_videos/<user>.mp4 \
-    --out       results/integrate_run/
-```
+The HRNet and SimpleBaseline checkpoints are tracked via Git LFS, so
+**run `git lfs pull` after cloning** to download the real binaries.
 
-Outputs in `--out`:
-
-- `report.md`     — human-readable score + timestamped feedback
-- `report.json`   — overall score, intervals, fusion params, models used
-- `report_curves.png` — similarity / confidence curve with error windows
-- `streams.npz`   — per-model error / similarity curves on the canonical time axis
-
-Configure which models/heads run via [`configs/integrate/pipeline.yaml`](configs/integrate/pipeline.yaml).
-Default config: HRNet + SimpleBaseline + GNN enabled; the Mia LSTM head is
-enabled when `checkpoints/lstm/best_model.pt` exists and otherwise falls back
-to the geometric threshold head. The SimpleBaseline config preserves the
-`simple-baseline-lynn` inference contract: direct bbox-resize crops, RGB channel
-order, and ImageNet normalization.
-
-Required local artifacts:
-
-| Path                                                | Source                       |
-| --------------------------------------------------- | ---------------------------- |
-| `data/processed/train_hrnet_w32/best.pt`            | trained on `max` branch      |
-| `data/processed/simple_baseline/best.pt`            | ported from `simple-baseline-lynn` |
-| `checkpoints/pose_gnn_encoder_oscar.pt`             | committed by `stevenmerge`   |
-| `checkpoints/lstm/best_model.pt` (optional)         | drop Mia LSTM ckpt to enable |
-| `data/external/pretrained/hrnetv2_w32_imagenet.pth` | `python scripts/download_hrnet_imagenet.py` |
-
-Use an explicit Mia checkpoint without editing YAML:
-
-```bash
-python run.py \
-    --benchmark data/raw_videos/<bench>.mp4 \
-    --learner   data/raw_videos/<user>.mp4 \
-    --out       results/integrate_lstm_run/ \
-    --lstm-checkpoint checkpoints/lstm/best_model.pt \
-    --require-lstm
-```
-
-Build/train/evaluate the LSTM head inside the integrated repo:
-
-```bash
-python scripts/build_lstm_dataset.py \
-    --kp-dir data/keypoints \
-    --out-train data/lstm/train \
-    --out-val data/lstm/val \
-    --out-test data/lstm/test
-
-python -m src.mia.train \
-    --train-dir data/lstm/train \
-    --val-dir data/lstm/val \
-    --checkpoint checkpoints/lstm/best_model.pt
-
-python -m src.mia.evaluate \
-    --test-dir data/lstm/test \
-    --checkpoint checkpoints/lstm/best_model.pt
-```
-
-
-
-**Read `docs/project_decisions.md` before touching anything.** All scope
-decisions (COCO-17 joints, the HRNet backbone exception, detector-only crop
-usage, upper-body weighting) are frozen there.
-
-## Repository layout
-
-```
-configs/            # YAML configs; every file references docs/project_decisions.md
-  data/             # data-pipeline configs
-  model/            # model architecture configs
-  train/            # training config (single stage, AIST++-only)
-data/               # runtime artifacts, manifests, labels, predictions, reports
-docs/               # frozen decisions, recording protocol
-scripts/            # orchestration / curation CLIs (incl. AIST prepare pipeline)
-src/
-  data/             # CSV parsing, manifests, downloading, AIST++ converter
-  datasets/         # AIST++ pose dataset + mixed-source sampler
-  models/           # Simple Baseline, HRNet-W32, heads, losses, decode
-  train/            # training engine, metrics, eval
-  infer/            # motion crop, video pose inference, temporal smoothing
-  compare/          # normalize, features, DTW, score, feedback, report
-  pose/             # integrated adapters for HRNet, SimpleBaseline, GNN
-  error/            # per-model keypoint and embedding error streams
-  fusion/           # final score / interval fusion
-  mia/              # namespaced LSTM temporal error detector utilities
-  pipeline/         # end-to-end integrated runner
-  app/              # Streamlit demo (built last)
-  utils/            # io, video, viz, seed, config
-tests/              # unit + smoke tests
-```
+The legacy GNN checkpoint at `checkpoints/pose_gnn_encoder_oscar.pt` is kept
+as a backup. It is no longer the default — pass it explicitly to override.
 
 ## Setup
 
@@ -130,7 +43,148 @@ Python 3.10+. On macOS install `ffmpeg` via Homebrew: `brew install ffmpeg`.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+# Pull LFS-tracked HRNet and SimpleBaseline weights:
+git lfs pull
 ```
+
+## Run the final demo
+
+```bash
+python run.py \
+    --benchmark inputs/benchmark.mp4 \
+    --learner   inputs/user.mp4 \
+    --out       results/final_demo
+```
+
+Outputs in `results/final_demo/`:
+
+- `report.md` — human-readable score + timestamped feedback
+- `report.json` — overall score, intervals, fusion params, models used
+- `report_curves.png` — similarity / confidence curve with error windows
+- `streams.npz` — per-model error / similarity curves on the canonical time axis
+- `aligned_side.mp4` — side-by-side overlay video with skeletons
+
+The default config in `configs/integrate/pipeline.yaml` enables HRNet,
+SimpleBaseline, and the SupCon GNN. The LSTM head is enabled when
+`checkpoints/lstm/best_model.pt` exists; otherwise the runner falls back to
+the geometric threshold head. Use `--require-lstm` to fail fast instead of
+falling back, or `--no-lstm` to force the fallback.
+
+## View results in Streamlit
+
+```bash
+streamlit run src/app/streamlit_app.py
+```
+
+The dashboard auto-discovers any directory containing a `report.json`
+under `results/` or `data/reports/`. After running the demo above, select
+**`results/final_demo`** in the sidebar.
+
+## Override the GNN checkpoint (optional)
+
+To run with the legacy Oscar GNN backup instead of the default SupCon one,
+edit `configs/integrate/pipeline.yaml` and set:
+
+```yaml
+models:
+  gnn:
+    checkpoint: checkpoints/pose_gnn_encoder_oscar.pt
+```
+
+## Reproducibility — training surfaces
+
+These are not needed to run the demo, but are kept so the final-submission
+checkpoints can be reproduced.
+
+### Train HRNet / SimpleBaseline
+
+```bash
+# Simple Baseline (Phase 6.1)
+python -m src.train.train_pose --train configs/train/train.yaml
+
+# HRNet-W32 (final pose model)
+python -m src.train.train_pose --train configs/train/train_hrnet.yaml
+```
+
+### Train the SupCon GNN encoder
+
+```bash
+python -m src.train.train_pose_gnn_supcon \
+    --config configs/train/train_pose_gnn_supcon_basicdance_allgenre_c01.yaml
+```
+
+The trainer copies the best checkpoint to
+`checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt` automatically.
+See `docs/training_supcon_basicdance.md` for details.
+
+### Train the Mia LSTM error detector
+
+```bash
+python scripts/build_lstm_dataset.py \
+    --kp-dir   data/keypoints \
+    --out-train data/lstm/train \
+    --out-val   data/lstm/val \
+    --out-test  data/lstm/test
+
+python -m src.mia.train \
+    --train-dir data/lstm/train \
+    --val-dir   data/lstm/val \
+    --checkpoint checkpoints/lstm/best_model.pt
+
+python -m src.mia.evaluate \
+    --test-dir data/lstm/test \
+    --checkpoint checkpoints/lstm/best_model.pt
+```
+
+## Repository layout
+
+```
+configs/            # YAML configs; every file references docs/project_decisions.md
+  data/             # data-pipeline configs
+  model/            # model architecture configs
+  train/            # training configs (HRNet, SimpleBaseline, SupCon GNN)
+  integrate/        # final inference pipeline config
+checkpoints/        # final SupCon GNN, LSTM, and legacy Oscar GNN checkpoints
+data/               # runtime artifacts, manifests, labels, predictions, reports
+docs/               # frozen decisions, training notes
+inputs/             # demo benchmark + user clips
+scripts/            # orchestration / curation CLIs (incl. AIST prepare pipeline)
+src/
+  data/             # CSV parsing, manifests, downloading, AIST++ converter
+  datasets/         # AIST++ pose dataset, mixed-source sampler, SupCon dataset
+  models/           # SimpleBaseline, HRNet-W32, PoseGNNEncoder, heads, decode
+  losses/           # SupCon loss
+  train/            # training engine, metrics, eval, SupCon GNN trainer
+  infer/            # detector crop, video pose inference, temporal smoothing
+  compare/          # normalize, embedding features, legacy DTW + render
+  pose/             # integrated adapters for HRNet, SimpleBaseline, GNN
+  error/            # per-model keypoint and embedding error streams
+  fusion/           # final score / interval fusion + markdown report
+  mia/              # LSTM temporal error detector + dataset / scoring
+  pipeline/         # end-to-end integrated runner (used by run.py)
+  app/              # Streamlit demo
+  utils/            # io, video, viz, seed, config, checkpoints
+tests/              # unit + smoke tests
+```
+
+## Generated artifacts (not tracked)
+
+These directories are regenerated locally and intentionally git-ignored:
+
+- `results/` — every pipeline run writes a fresh subdirectory here
+- `data/reports/` — older comparison reports from preliminary experiments
+- `logs/` — SLURM and training logs
+- `data/processed/torch_cache/` — torchvision detector cache (auto-redownloaded)
+- `data/processed/train_pose_gnn_supcon_basicdance*/` — SupCon training runs;
+  the only thing promoted out of these dirs is the deployed checkpoint at
+  `checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt`
+- `data/raw_frames/`, `data/raw_videos/`, `data/keypoints2d/`, `data/labels/` —
+  source data and labels used by the training pipeline
+
+**Read `docs/project_decisions.md` before touching anything.** All scope
+decisions (COCO-17 joints, the HRNet backbone exception, detector-only crop
+usage, upper-body weighting) are frozen there.
 
 ## Quick smoke commands
 
@@ -140,45 +194,6 @@ python run.py --help
 python -m src.train.train_pose --help
 python -m src.infer.run_pose_on_video --help
 ```
-
-## Training data pipeline (AIST++-only)
-
-All supervised pose training runs on frames extracted from the clips in
-`data/raw_videos/`, supervised by the matching AIST++ 2D keypoints.
-There is no COCO, no CrowdPose, no pseudo-labeling.
-
-1. Drop the AIST++ per-video 2D keypoint files (`.pkl` or `.npy`) under
-   `data/labels/aistpp/keypoints2d_raw/<video_stem>.pkl`. Stems must
-   match filenames in `data/raw_videos/`.
-2. Build frames + train/val JSONL splits:
-
-```bash
-python -m scripts.prepare_aist_training_data \
-    --raw-videos data/raw_videos \
-    --keypoints-dir data/labels/aistpp/keypoints2d_raw \
-    --frames-dir data/raw_frames/aistpp \
-    --out-dir data/labels/aistpp \
-    --frame-stride 8
-```
-
-3. Train:
-
-```bash
-python -m src.train.train_pose --train configs/train/train.yaml
-```
-
-## Milestones (follow in order, never skip)
-
-1.  Repo + configs + manifests work.
-2.  Videos in `data/raw_videos/` + AIST++ 2D keypoints on disk.
-3.  `scripts/prepare_aist_training_data.py` produces train/val JSONL.
-4.  Simple baseline overfits a tiny subset.
-5.  Simple baseline trains on the full AIST++-labeled data.
-6.  HRNet-style model beats baseline.
-7.  Video pose inference on benchmark and imitation clips.
-8.  DTW alignment and scoring.
-9.  Feedback generation.
-10. Streamlit demo end to end.
 
 ## What this project will NOT do (v1)
 

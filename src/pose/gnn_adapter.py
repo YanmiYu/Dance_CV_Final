@@ -22,7 +22,7 @@ from src.pose.base import PoseRunResult
 def encode_from_pose_result(
     upstream: PoseRunResult,
     *,
-    checkpoint: str = "checkpoints/pose_gnn_encoder_oscar.pt",
+    checkpoint: str = "checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt",
     device: str = "auto",
     normalize_cfg: Optional[NormalizeConfig] = None,
 ) -> PoseRunResult:

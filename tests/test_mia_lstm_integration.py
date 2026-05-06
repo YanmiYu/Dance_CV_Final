@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.error.keypoint_stream import build as build_keypoint_stream
+from src.error.keypoint_stream import calibrate_lstm_probabilities, build as build_keypoint_stream
 from src.mia.model import TemporalErrorDetector, load_checkpoint, save_checkpoint
 from src.pipeline.run_pipeline import _resolve_lstm_section
 
@@ -66,6 +66,23 @@ def test_keypoint_stream_uses_lstm_probabilities_when_checkpoint_exists(tmp_path
     assert np.all((stream.part_probs >= 0.0) & (stream.part_probs <= 1.0))
 
 
+def test_lstm_probability_calibration_reduces_overconfident_probs() -> None:
+    probs = np.array([[0.2, 0.5, 0.85]], dtype=np.float32)
+
+    calibrated = calibrate_lstm_probabilities(
+        probs,
+        {
+            "calibration_method": "logit",
+            "probability_scale": 0.75,
+            "probability_bias": -0.15,
+        },
+    )
+
+    assert calibrated.shape == probs.shape
+    assert np.all((calibrated >= 0.0) & (calibrated <= 1.0))
+    assert calibrated[0, 2] < probs[0, 2]
+
+
 def test_keypoint_stream_falls_back_without_checkpoint(tmp_path: Path) -> None:
     stream = build_keypoint_stream(
         name="hrnet",
@@ -89,6 +106,7 @@ def test_lstm_config_override_and_require_mode(tmp_path: Path) -> None:
     assert resolved == str(ckpt)
     assert status["enabled"] is True
     assert status["checkpoint_exists"] is True
+    assert status["probability_calibration"]["method"] == "logit"
 
     with pytest.raises(FileNotFoundError):
         _resolve_lstm_section(

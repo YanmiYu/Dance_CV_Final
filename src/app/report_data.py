@@ -22,6 +22,14 @@ PART_LABELS = {
     "HEAD": "Head",
 }
 
+MODEL_LABELS = {
+    "hrnet": "HRNet-W32",
+    "simple_baseline": "SimpleBaseline",
+    "gnn": "GNN Embedding",
+}
+
+MODEL_ORDER = ("hrnet", "simple_baseline", "gnn")
+
 LEGACY_PARTS = {
     "left_arm": "LEFT_ARM",
     "right_arm": "RIGHT_ARM",
@@ -158,6 +166,8 @@ def _build_integrated_dashboard(report: dict[str, Any], streams: dict[str, np.nd
         "score_breakdown": score_breakdown,
         "body_part_rows": _body_part_rows(per_part_score, per_part_off),
         "model_rows": _model_rows(model_similarity),
+        "model_score_summary": _model_score_summary(model_similarity),
+        "model_curves": _model_curves_payload(streams, time_axis),
         "timeline_windows": timeline_windows,
         "interval_rows": intervals,
         "coaching_report": coaching,
@@ -225,6 +235,8 @@ def _build_legacy_dashboard(report: dict[str, Any], streams: dict[str, np.ndarra
         "score_breakdown": breakdown,
         "body_part_rows": _body_part_rows(per_part_score, per_part_off),
         "model_rows": [],
+        "model_score_summary": _model_score_summary({}),
+        "model_curves": _model_curves_payload(streams, _array(streams.get("time_axis"))),
         "timeline_windows": timeline_windows,
         "interval_rows": interval_rows,
         "coaching_report": coaching,
@@ -409,6 +421,60 @@ def _model_rows(model_similarity: dict[str, float]) -> list[dict[str, Any]]:
         {"model": name, "score": _safe_float(score)}
         for name, score in sorted(model_similarity.items())
     ]
+
+
+def _ordered_model_items(model_similarity: dict[str, float]) -> list[tuple[str, float]]:
+    names = list(MODEL_ORDER) + sorted(name for name in model_similarity if name not in MODEL_ORDER)
+    return [(name, _safe_float(model_similarity[name])) for name in names if name in model_similarity]
+
+
+def _model_score_summary(model_similarity: dict[str, float]) -> dict[str, Any]:
+    items = _ordered_model_items(model_similarity)
+    if not items:
+        return {"weighted_model_score": None, "rows": []}
+    weight = 1.0 / len(items)
+    rows = [
+        {
+            "model": name,
+            "label": MODEL_LABELS.get(name, name.replace("_", " ").title()),
+            "score": score,
+            "weight": weight,
+            "weight_percent": weight * 100.0,
+            "contribution": score * weight,
+        }
+        for name, score in items
+    ]
+    return {
+        "weighted_model_score": float(sum(row["contribution"] for row in rows)),
+        "rows": rows,
+    }
+
+
+def _model_curves_payload(streams: dict[str, np.ndarray], time_axis: np.ndarray) -> dict[str, Any]:
+    curves: dict[str, Any] = {}
+    time = _array(time_axis)
+    for key, values in streams.items():
+        if not key.endswith("_cosine"):
+            continue
+        name = key.removesuffix("_cosine")
+        cos = _array(values).clip(-1.0, 1.0)
+        if cos.ndim != 1 or cos.size == 0:
+            continue
+        n = int(min(cos.size, time.size)) if time.size else int(cos.size)
+        if n <= 0:
+            continue
+        curve_time = time[:n] if time.size else np.arange(n, dtype=np.float32)
+        curve_cos = cos[:n]
+        score = ((curve_cos + 1.0) * 0.5 * 100.0).clip(0.0, 100.0)
+        curves[name] = {
+            "label": MODEL_LABELS.get(name, name.replace("_", " ").title()),
+            "time_axis": curve_time.tolist(),
+            "cosine": curve_cos.tolist(),
+            "score": score.tolist(),
+            "mean_cosine": float(curve_cos.mean()),
+            "mean_score": float(score.mean()),
+        }
+    return curves
 
 
 def _curves_payload(

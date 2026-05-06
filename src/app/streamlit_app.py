@@ -25,6 +25,13 @@ from src.app.report_data import discover_report_runs, load_dashboard_data
 
 st.set_page_config(page_title="Dance Practice Review", layout="wide", initial_sidebar_state="expanded")
 
+MODEL_DISPLAY_ORDER = ("hrnet", "simple_baseline", "gnn")
+MODEL_COLORS = {
+    "hrnet": "#2563eb",
+    "simple_baseline": "#0f766e",
+    "gnn": "#d95f4f",
+}
+
 
 def _inject_css() -> None:
     st.markdown(
@@ -322,6 +329,121 @@ def _model_chart(rows: list[dict]) -> go.Figure | None:
     return _base_layout(fig, height=300)
 
 
+def _model_score_by_name(data: dict) -> dict[str, dict]:
+    summary = data.get("model_score_summary") or {}
+    return {row["model"]: row for row in summary.get("rows", [])}
+
+
+def _render_model_score_cards(data: dict) -> None:
+    by_name = _model_score_by_name(data)
+    summary = data.get("model_score_summary") or {}
+    columns = st.columns(5)
+    for idx, model_name in enumerate(MODEL_DISPLAY_ORDER):
+        row = by_name.get(model_name)
+        with columns[idx]:
+            if row:
+                _metric_card(row["label"], f"{float(row['score']):.1f}", f"{float(row['weight_percent']):.0f}% weight")
+            else:
+                _metric_card(model_name.replace("_", " ").title(), "N/A", "not in report")
+    weighted = summary.get("weighted_model_score")
+    with columns[3]:
+        _metric_card(
+            "Weighted Overall",
+            f"{float(weighted):.1f}" if weighted is not None else "N/A",
+            "equal model weights",
+        )
+    with columns[4]:
+        _metric_card("Final Pipeline", f"{data['overall_score']:.1f}", "with pose-control penalties")
+
+
+def _model_score_fusion_chart(data: dict) -> go.Figure | None:
+    rows = (data.get("model_score_summary") or {}).get("rows", [])
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=df["label"],
+            y=df["score"],
+            marker_color=[MODEL_COLORS.get(name, "#697386") for name in df["model"]],
+            text=df["score"].map(lambda value: f"{value:.1f}"),
+            textposition="outside",
+            name="Model score",
+        )
+    )
+    weighted = (data.get("model_score_summary") or {}).get("weighted_model_score")
+    if weighted is not None:
+        fig.add_hline(
+            y=float(weighted),
+            line_dash="dash",
+            line_color="#1f2933",
+            annotation_text=f"Weighted overall {float(weighted):.1f}",
+            annotation_position="top left",
+        )
+    fig.add_hline(
+        y=float(data["overall_score"]),
+        line_dash="dot",
+        line_color="#b7791f",
+        annotation_text=f"Final pipeline {float(data['overall_score']):.1f}",
+        annotation_position="bottom left",
+    )
+    fig.update_yaxes(range=[0, 105], title="Score", gridcolor="#eee6da")
+    fig.update_xaxes(title="")
+    fig.update_layout(title="Model Scores and Overall Fusion")
+    return _base_layout(fig, height=360)
+
+
+def _pose_model_score_chart(data: dict) -> go.Figure | None:
+    curves = data.get("model_curves") or {}
+    selected = [name for name in ("hrnet", "simple_baseline") if name in curves]
+    if not selected:
+        return None
+    fig = go.Figure()
+    for name in selected:
+        curve = curves[name]
+        fig.add_trace(
+            go.Scatter(
+                x=curve["time_axis"],
+                y=curve["score"],
+                mode="lines",
+                name=curve["label"],
+                line={"color": MODEL_COLORS.get(name, "#697386"), "width": 2.4},
+            )
+        )
+    fig.update_yaxes(range=[0, 105], title="Score", gridcolor="#eee6da")
+    fig.update_xaxes(title="Benchmark time (s)", gridcolor="#f3ece2")
+    fig.update_layout(title="HRNet and SimpleBaseline Score Over Time")
+    return _base_layout(fig, height=360)
+
+
+def _gnn_embedding_cosine_chart(data: dict) -> go.Figure | None:
+    curve = (data.get("model_curves") or {}).get("gnn")
+    if not curve:
+        return None
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=curve["time_axis"],
+            y=curve["cosine"],
+            mode="lines",
+            name="GNN embedding cosine",
+            line={"color": MODEL_COLORS["gnn"], "width": 2.4},
+        )
+    )
+    fig.add_hline(
+        y=float(curve["mean_cosine"]),
+        line_dash="dash",
+        line_color="#1f2933",
+        annotation_text=f"Mean {float(curve['mean_cosine']):.3f}",
+        annotation_position="bottom left",
+    )
+    fig.update_yaxes(range=[-1.0, 1.05], title="Cosine similarity", gridcolor="#eee6da")
+    fig.update_xaxes(title="Benchmark time (s)", gridcolor="#f3ece2")
+    fig.update_layout(title="GNN Embedding Cosine Similarity")
+    return _base_layout(fig, height=360)
+
+
 def _coach_panel(title: str, lines: list[str], *, focus: bool = False) -> None:
     css_class = "coach-panel focus" if focus else "coach-panel"
     body = "".join(f'<p class="coach-line">{line}</p>' for line in lines[:4])
@@ -381,8 +503,12 @@ with top_cols[2]:
 with top_cols[3]:
     _metric_card("Flagged Time", f"{off_time:.1f}s", f"{int(breakdown.get('interval_count', 0))} intervals")
 
-overview, timeline, body_parts, coach, diagnostics, video = st.tabs(
-    ["Overview", "Timeline", "Body Parts", "Coach Report", "Model Diagnostics", "Video"]
+if (data.get("model_score_summary") or {}).get("rows"):
+    st.subheader("Model Scores")
+    _render_model_score_cards(data)
+
+overview, model_scores, timeline, body_parts, coach, diagnostics, video = st.tabs(
+    ["Overview", "Model Scores", "Timeline", "Body Parts", "Coach Report", "Model Diagnostics", "Video"]
 )
 
 with overview:
@@ -416,6 +542,33 @@ with overview:
                 st.image(curve_png, caption="Pipeline curve artifact")
             else:
                 st.info("No timeline curves are available for this run.")
+
+with model_scores:
+    _render_model_score_cards(data)
+    score_chart = _model_score_fusion_chart(data)
+    if score_chart is not None:
+        st.plotly_chart(score_chart, width="stretch", key="model_scores_fusion")
+    plot_cols = st.columns(2)
+    with plot_cols[0]:
+        pose_fig = _pose_model_score_chart(data)
+        if pose_fig is not None:
+            st.plotly_chart(pose_fig, width="stretch", key="model_scores_pose_models")
+        else:
+            st.info("No HRNet/SimpleBaseline score curves are available for this run.")
+    with plot_cols[1]:
+        gnn_fig = _gnn_embedding_cosine_chart(data)
+        if gnn_fig is not None:
+            st.plotly_chart(gnn_fig, width="stretch", key="model_scores_gnn_cosine")
+        else:
+            st.info("No GNN embedding cosine curve is available for this run.")
+    rows = (data.get("model_score_summary") or {}).get("rows", [])
+    if rows:
+        table = pd.DataFrame(rows)
+        st.dataframe(
+            table[["label", "score", "weight_percent", "contribution"]],
+            width="stretch",
+            hide_index=True,
+        )
 
 with timeline:
     fig = _timeline_chart(data)
