@@ -1,0 +1,49 @@
+decisions_ref: docs/project_decisions.md
+
+# Legacy Basic Dance SupCon config. This preserves the previous command path.
+# It is intentionally constrained to gBR and all cAll-expanded cameras.
+
+pkl_root: data/keypoints2d
+index_csv: data/processed/basic_dance_embedding_index.csv
+output_dir: data/processed/train_pose_gnn_supcon_basicdance
+
+situation: sBM
+use_cameras: ["c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09"]
+genres: ["gBR"]
+rebuild_index: false
+
+split_mode: dance_label
+val_ratio: 0.2
+val_cameras: null
+seed: 42
+
+window_size: 32
+window_stride: 8
+min_confidence: 0.2
+
+in_features: 3
+embedding_dim: 128
+frame_embedding_dim: 128
+dropout: 0.1
+pooling: mean
+
+temperature: 0.07
+
+n_labels_per_batch: 16
+n_samples_per_label: 4
+batches_per_epoch: null
+min_train_rows_per_label: 2
+
+epochs: 60
+learning_rate: 3.0e-4
+weight_decay: 1.0e-4
+grad_clip: 1.0
+
+device: auto
+num_workers: 4
+save_every: 5
+eval_every: 1
+log_every: 10
+pair_eval_max_pairs_per_type: 50000
+
+deploy_checkpoint: checkpoints/pose_gnn_encoder_basicdance_supcon.pt
