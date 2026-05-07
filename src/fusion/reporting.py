@@ -345,15 +345,6 @@ def format_coaching_markdown(
         used = "yes" if lstm_status.get("used") else "no"
         streams = ", ".join(lstm_status.get("streams") or []) or "none"
         lines.append(f"- LSTM used: {used} ({streams})")
-        calibration = lstm_status.get("probability_calibration") or {}
-        if calibration:
-            lines.append(
-                "- LSTM calibration: "
-                f"{calibration.get('method', 'logit')} "
-                f"scale={float(calibration.get('probability_scale', 1.0)):.2f}, "
-                f"bias={float(calibration.get('probability_bias', 0.0)):.2f}, "
-                f"threshold={float(calibration.get('threshold', 0.5)):.2f}"
-            )
     lines.extend(f"- {item}" for item in coaching["status_notes"])
     lines.append("")
     return "\n".join(lines)

@@ -29,7 +29,7 @@ models:
   gnn:
     enabled: true
     upstream: hrnet
-    checkpoint: checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt
+    checkpoint: checkpoints/pose_gnn_encoder_oscar.pt
 
 # When the Mia LSTM checkpoint is present, keypoint streams use LSTM
 # probabilities for per-part "off" detection. If the checkpoint is absent, the
@@ -37,18 +37,14 @@ models:
 lstm:
   enabled: true
   checkpoint: checkpoints/lstm/best_model.pt
-  calibration_method: logit
-  probability_scale: 0.75
-  probability_bias: -0.15
-  threshold: 0.65
 
 error_detection:
   threshold: 0.25       # torso-length error above which threshold head flags a frame
   min_duration_s: 0.5
 
 fusion:
-  similarity_weight: 0.55
-  off_threshold: 0.65
+  similarity_weight: 0.4
+  off_threshold: 0.5
 
 scoring:
   body_part_weights:

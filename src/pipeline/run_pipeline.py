@@ -74,12 +74,6 @@ def _resolve_lstm_section(
         "checkpoint": checkpoint,
         "checkpoint_exists": checkpoint_exists,
         "required": require_lstm,
-        "probability_calibration": {
-            "method": str(section.get("calibration_method", "logit")),
-            "probability_scale": float(section.get("probability_scale", 1.0)),
-            "probability_bias": float(section.get("probability_bias", 0.0)),
-            "threshold": float(section.get("threshold", 0.5)),
-        },
     }
     return (checkpoint if enabled else None), status
 
@@ -201,7 +195,6 @@ def run(
                 user_kp=user_pr.poses,
                 fps=bench_pr.fps,
                 lstm_ckpt=lstm_ckpt,
-                lstm_calibration=cfg.get("lstm", {}),
                 device=lstm_device,
             )
             keypoint_streams.append(ks)
