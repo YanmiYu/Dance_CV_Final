@@ -43,6 +43,17 @@ data/keypoints2d/*.pkl
 data/videos/*.mp4
 checkpoints/*.pt
 checkpoints/**/*.pt
+yolov8n.pt
+# Final-submission checkpoints are tracked explicitly (LSTM is the only one
+# small enough to commit directly; the others are tracked under data/processed
+# via Git LFS — see .gitattributes).
+!checkpoints/lstm/best_model.pt
+!checkpoints/pose_gnn_encoder_basicdance_allgenre_c01_supcon.pt
+!checkpoints/pose_gnn_encoder_oscar.pt
+
+# Pipeline run outputs are regenerated locally; never commit.
+results/
+
 *.out
 *.err
 logs/slurm/*.out

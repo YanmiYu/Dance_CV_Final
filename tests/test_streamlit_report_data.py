@@ -68,6 +68,9 @@ def test_dashboard_data_uses_integrated_v2_fields() -> None:
     assert data["score_breakdown"]["overall"] == 82.0
     assert data["body_part_rows"][0]["part"] == "RIGHT_ARM"
     assert data["model_rows"] == [{"model": "hrnet", "score": 87.0}]
+    assert data["model_score_summary"]["weighted_model_score"] == 87.0
+    assert data["model_curves"]["hrnet"]["mean_score"] > 90.0
+    assert np.isclose(data["model_curves"]["gnn"]["mean_cosine"], 0.96)
     assert data["timeline_windows"][0]["weakest_part"] == "RIGHT_ARM"
     assert data["coaching_report"]["summary"] == "Good run."
 
@@ -89,6 +92,8 @@ def test_dashboard_data_builds_current_integrated_fallback_from_streams() -> Non
     assert len(data["body_part_rows"]) == 6
     assert data["body_part_rows"][0]["part"] == "RIGHT_ARM"
     assert {row["model"] for row in data["model_rows"]} == {"hrnet", "gnn"}
+    assert {row["model"] for row in data["model_score_summary"]["rows"]} == {"hrnet", "gnn"}
+    assert set(data["model_curves"]) == {"hrnet", "gnn"}
     assert data["timeline_windows"]
     assert data["coaching_report"]["practice_plan"]
 
@@ -114,6 +119,7 @@ def test_dashboard_data_handles_legacy_nested_scores() -> None:
     assert data["report_type"] == "legacy"
     assert data["overall_score"] == 61.0
     assert data["body_part_rows"][0]["part"] == "RIGHT_ARM"
+    assert data["model_score_summary"]["rows"] == []
     assert data["timeline_windows"][1]["score"] == 48.0
     assert data["interval_rows"][0]["label"] == "Weak Window"
 
