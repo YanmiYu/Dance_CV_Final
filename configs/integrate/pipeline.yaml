@@ -3,6 +3,9 @@
 # -> fusion. Flip enabled flags as checkpoints become available.
 
 preprocessing:
+  # Final/demo runs use detector-based person cropping. Do not use the local
+  # motion-crop debug config for submitted results; it can produce lower-quality
+  # crops on custom portrait videos.
   crop_mode: detector_union
   detector_backend: yolov8      # "yolov8" or "torchvision"
   detector_model: yolov8n.pt

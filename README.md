@@ -50,11 +50,34 @@ git lfs pull
 
 ## Run the final demo
 
+The final demo uses the detector-based preprocessing in
+`configs/integrate/pipeline.yaml`:
+
+```yaml
+preprocessing:
+  crop_mode: detector_union
+```
+
+Do not use any temporary `/tmp/*motion*` pipeline config for submitted demo
+results. Motion crop is only a debug fallback and can produce much lower
+scores on custom portrait videos.
+
+Fast path:
+
 ```bash
-python run.py \
-    --benchmark inputs/benchmark.mp4 \
-    --learner   inputs/user.mp4 \
-    --out       results/final_demo
+bash scripts/run_final_demo.sh
+```
+
+Equivalent explicit command:
+
+```bash
+PYTHONPATH=. .venv/bin/python run.py \
+  --benchmark inputs/benchmark.mp4 \
+  --learner inputs/user.mp4 \
+  --out results/final_demo \
+  --config configs/integrate/pipeline.yaml \
+  --device cpu \
+  --require-lstm
 ```
 
 Outputs in `results/final_demo/`:
@@ -66,20 +89,38 @@ Outputs in `results/final_demo/`:
 - `aligned_side.mp4` — side-by-side overlay video with skeletons
 
 The default config in `configs/integrate/pipeline.yaml` enables HRNet,
-SimpleBaseline, and the SupCon GNN. The LSTM head is enabled when
-`checkpoints/lstm/best_model.pt` exists; otherwise the runner falls back to
-the geometric threshold head. Use `--require-lstm` to fail fast instead of
-falling back, or `--no-lstm` to force the fallback.
+SimpleBaseline, and the SupCon GNN. It uses detector-based person cropping.
+If `ultralytics`/YOLOv8 is unavailable locally, the runner falls back to the
+torchvision person detector. The LSTM head is enabled when
+`checkpoints/lstm/best_model.pt` exists; otherwise the runner falls back to the
+geometric threshold head. Use `--require-lstm` to fail fast instead of falling
+back, or `--no-lstm` to force the fallback.
+
+To run custom videos, keep the same config and change only the input/output
+paths:
+
+```bash
+PYTHONPATH=. .venv/bin/python run.py \
+  --benchmark max.mp4 \
+  --learner remus.mp4 \
+  --out results/demo_max_remus \
+  --config configs/integrate/pipeline.yaml \
+  --device cpu \
+  --require-lstm
+```
 
 ## View results in Streamlit
 
 ```bash
-streamlit run src/app/streamlit_app.py
+PYTHONPATH=. .venv/bin/streamlit run src/app/streamlit_app.py \
+  --server.port 8503 \
+  --server.address localhost
 ```
 
 The dashboard auto-discovers any directory containing a `report.json`
 under `results/` or `data/reports/`. After running the demo above, select
-**`results/final_demo`** in the sidebar.
+**`results/final_demo`** in the sidebar, then open
+`http://localhost:8503`.
 
 ## Override the GNN checkpoint (optional)
 
@@ -182,9 +223,9 @@ These directories are regenerated locally and intentionally git-ignored:
 - `data/raw_frames/`, `data/raw_videos/`, `data/keypoints2d/`, `data/labels/` —
   source data and labels used by the training pipeline
 
-**Read `docs/project_decisions.md` before touching anything.** All scope
-decisions (COCO-17 joints, the HRNet backbone exception, detector-only crop
-usage, upper-body weighting) are frozen there.
+For final demo runs, keep `configs/integrate/pipeline.yaml` on
+`crop_mode: detector_union` so HRNet, SimpleBaseline, SupCon GNN, LSTM, and
+Streamlit all evaluate the same detector-preprocessed pose streams.
 
 ## Quick smoke commands
 
