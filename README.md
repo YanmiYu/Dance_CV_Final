@@ -18,7 +18,7 @@ branches into a single end-to-end pipeline:
 - HRNet-W32 pose estimator (`max` branch)
 - SimpleBaseline pose estimator (`simple-baseline-lynn` branch)
 - GNN pose-encoder for embedding-space similarity (`stevenmerge` branch)
-- LSTM temporal error detector + scoring + feedback (`Mia` branch)
+- ≈ temporal error detector + scoring + feedback (`Mia` branch)
 
 The default preprocessing stage uses YOLOv8 person detection for a stable
 full-body crop, matching the project pipeline diagram. Set
